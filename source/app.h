@@ -17,6 +17,7 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include <atomic>
 #include <condition_variable>
 
 namespace ss {
@@ -130,6 +131,7 @@ private:
     std::thread m_searchThread;
     bool m_loadingDetail = false;
     std::thread m_detailLoadingThread;
+    std::atomic<int> m_detailGeneration{0};
     std::thread m_installThread;
     uint32_t m_osdShowTime = 0;
 

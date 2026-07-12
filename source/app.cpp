@@ -581,10 +581,14 @@ void App::handleInputForPad(u64 kDown) {
                     m_loadingStreams = true;
                     
                     if (m_detailLoadingThread.joinable()) {
-                        m_detailLoadingThread.join();
+                        m_detailLoadingThread.detach();
                     }
-                    m_detailLoadingThread = std::thread([this, epId]() {
-                        auto rawStreams = m_addonManager.getAllStreams("series", epId);
+                    
+                    int currentGen = ++m_detailGeneration;
+                    std::string epType = m_detailMeta.type;
+
+                    m_detailLoadingThread = std::thread([this, epType, epId, currentGen]() {
+                        auto rawStreams = m_addonManager.getAllStreams(epType, epId);
                         std::vector<Stream> loadedStreams;
                         for (const auto& s : rawStreams) {
                             bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
@@ -603,6 +607,9 @@ void App::handleInputForPad(u64 kDown) {
                                 }
                             }
                         }
+                        
+                        if (m_detailGeneration.load() != currentGen) return;
+                        
                         {
                             std::lock_guard<std::mutex> lock(m_streamsMutex);
                             m_detailStreams = std::move(loadedStreams);
@@ -1203,10 +1210,14 @@ void App::handleTouch(int x, int y) {
                         m_loadingStreams = true;
                     }
                     if (m_detailLoadingThread.joinable()) {
-                        m_detailLoadingThread.join();
+                        m_detailLoadingThread.detach();
                     }
-                    m_detailLoadingThread = std::thread([this, epId]() {
-                        auto rawStreams = m_addonManager.getAllStreams("series", epId);
+                    
+                    int currentGen = ++m_detailGeneration;
+                    std::string epType = m_detailMeta.type;
+
+                    m_detailLoadingThread = std::thread([this, epType, epId, currentGen]() {
+                        auto rawStreams = m_addonManager.getAllStreams(epType, epId);
                         std::vector<Stream> loadedStreams;
                         for (const auto& s : rawStreams) {
                             bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
@@ -1225,6 +1236,9 @@ void App::handleTouch(int x, int y) {
                                 }
                             }
                         }
+                        
+                        if (m_detailGeneration.load() != currentGen) return;
+                        
                         {
                             std::lock_guard<std::mutex> lock(m_streamsMutex);
                             m_detailStreams = std::move(loadedStreams);
@@ -3030,10 +3044,12 @@ void App::loadDetail(const std::string& type, const std::string& id) {
     m_detailMeta = MetaItem(); // clear old
 
     if (m_detailLoadingThread.joinable()) {
-        m_detailLoadingThread.join();
+        m_detailLoadingThread.detach();
     }
+    
+    int currentGen = ++m_detailGeneration;
 
-    m_detailLoadingThread = std::thread([this, type, id]() {
+    m_detailLoadingThread = std::thread([this, type, id, currentGen]() {
         MetaResponse resp;
         MetaItem loadedMeta;
         if (m_addonManager.getMeta(type, id, resp)) {
@@ -3046,6 +3062,7 @@ void App::loadDetail(const std::string& type, const std::string& id) {
                 if (a.season != b.season) return a.season < b.season;
                 return a.episode < b.episode;
             });
+            if (m_detailGeneration.load() != currentGen) return;
             {
                 std::lock_guard<std::mutex> lock(m_streamsMutex);
                 m_detailEpisodes = std::move(sortedEps);
@@ -3093,6 +3110,7 @@ void App::loadDetail(const std::string& type, const std::string& id) {
             }
         }
 
+        if (m_detailGeneration.load() != currentGen) return;
         {
             std::lock_guard<std::mutex> lock(m_streamsMutex);
             m_detailMeta = std::move(loadedMeta);
