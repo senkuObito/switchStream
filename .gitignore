@@ -4,6 +4,7 @@ devkitpro_temp/
 switchstream_data/
 *.elf
 *.nro
+*.o
 *.nacp
 romfs/assets/*
 !romfs/assets/.gitkeep
