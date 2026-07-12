@@ -550,8 +550,21 @@ void App::handleInputForPad(u64 kDown) {
 
     case Screen::DETAIL:
         {
+            if (m_loadingDetail || m_loadingStreams) {
+                if (kDown & HidNpadButton_B) {
+                    if (m_loadingStreams && m_detailEpisodeSelected) {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        m_loadingStreams = false;
+                        m_detailEpisodeSelected = false;
+                    } else {
+                        m_screen = Screen::HOME;
+                        m_loadingDetail = false;
+                    }
+                }
+                break;
+            }
+
             std::lock_guard<std::mutex> lock(m_streamsMutex);
-            if (m_loadingStreams) break;
 
             if (!m_detailEpisodeSelected && !m_detailEpisodes.empty()) {
                 if (kDown & HidNpadButton_Down) m_detailEpisodeIndex++;
@@ -1119,9 +1132,54 @@ void App::handleTouch(int x, int y) {
 
         if (isLoading || m_loadingDetail) return;
 
-        // Episode List Items
+        bool isModal = epsSelected;
+
+        if (isModal) {
+            int modalW = 800;
+            int modalH = 500;
+            int modalX = SCREEN_W / 2 - modalW / 2;
+            int modalY = SCREEN_H / 2 - modalH / 2;
+
+            if (x < modalX || x > modalX + modalW || y < modalY || y > modalY + modalH) {
+                // Clicked outside modal -> cancel episode selection
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                m_detailEpisodeSelected = false;
+                m_loadingStreams = false;
+                return;
+            }
+
+            if (localStreams.empty()) return;
+
+            int maxVisible = 9;
+            int startIndex = 0;
+            if (currentSelIndex >= maxVisible) {
+                startIndex = currentSelIndex - maxVisible + 1;
+            }
+
+            int streamY = modalY + 80;
+            for (int i = startIndex; i < (int)localStreams.size() && i < startIndex + maxVisible; i++) {
+                int itemMinY = streamY - 2;
+                int itemMaxY = streamY + 34;
+                int itemMinX = modalX + 25;
+                int itemMaxX = modalX + modalW - 25;
+
+                if (x >= itemMinX && x <= itemMaxX && y >= itemMinY && y <= itemMaxY) {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    m_detailStreamIndex = i;
+                    playStream(localStreams[i]);
+                    return;
+                }
+                streamY += 40;
+            }
+            return;
+        }
+
+        // Episode List Items (Non-Modal)
         if (!epsSelected && !localEpisodes.empty()) {
-            int maxVisible = 8;
+            int remainingH = SCREEN_H - 240 - 40;
+            int maxVisible = remainingH / 40;
+            if (maxVisible < 3) maxVisible = 3;
+
             int startIndex = 0;
             if (currentEpIndex >= maxVisible) {
                 startIndex = currentEpIndex - maxVisible + 1;
@@ -1180,10 +1238,13 @@ void App::handleTouch(int x, int y) {
             return;
         }
 
-        // Stream Items
+        // Stream Items (Non-Modal for movies)
         if (localStreams.empty()) return;
 
-        int maxVisible = 8;
+        int remainingH = SCREEN_H - 240 - 40;
+        int maxVisible = remainingH / 40;
+        if (maxVisible < 3) maxVisible = 3;
+
         int startIndex = 0;
         if (currentSelIndex >= maxVisible) {
             startIndex = currentSelIndex - maxVisible + 1;
@@ -2216,7 +2277,7 @@ void App::renderDetail() {
         localEpisodes = m_detailEpisodes;
     }
 
-    if (!epsSelected && !localEpisodes.empty()) {
+    if (!localEpisodes.empty()) {
         drawText("Select Episode:", infoX, streamsHeaderY, ACCENT, m_fontNormal);
         int streamsStartY = streamsHeaderY + 32;
 
@@ -2250,60 +2311,130 @@ void App::renderDetail() {
         if (startIndex + maxVisible < (int)localEpisodes.size()) {
             drawText("v More episodes below...", infoX, y + 2, TEXT_SECONDARY, m_fontSmall);
         }
-        return;
+
+        if (!epsSelected) return;
     }
 
-    drawText("Available Streams:", infoX, streamsHeaderY, ACCENT, m_fontNormal);
-    int streamsStartY = streamsHeaderY + 32;
-
-    if (isLoading) {
-        drawSpinner(infoX - 25, streamsStartY + 8, 10);
-        drawText("Querying addons for stream links... Please wait...", infoX, streamsStartY, {150, 200, 255, 255}, m_fontSmall);
-        return;
-    }
-
-    if (localStreams.empty()) {
-        drawText("No playable streams found.", infoX, streamsStartY, TEXT_SECONDARY);
-        return;
-    }
-
-    // Since description might take up a lot of space, we calculate visible streams based on remaining vertical screen height!
-    int remainingH = SCREEN_H - streamsStartY - 40;
-    int maxVisible = remainingH / 40;
-    if (maxVisible < 3) maxVisible = 3;
-
-    int startIndex = 0;
-    if (currentSelIndex >= maxVisible) {
-        startIndex = currentSelIndex - maxVisible + 1;
-    }
-
-    int y = streamsStartY;
-    if (startIndex > 0) {
-        drawText("^ More streams above...", infoX, y - 18, TEXT_SECONDARY, m_fontSmall);
-    }
-
-    for (int i = startIndex; i < (int)localStreams.size() && i < startIndex + maxVisible; i++) {
-        bool sel = (i == currentSelIndex);
-        if (sel) drawFilledRect(infoX - 5, y - 2, SCREEN_W - infoX - 40, 36, CARD_HL);
-
-        auto& s = localStreams[i];
-        std::string label = s.name.empty() ? "Stream " + std::to_string(i+1) : s.name;
-        std::string titleClean;
-        for (char c : s.title) {
-            if (c == '\n' || c == '\r') titleClean += ' ';
-            else titleClean += c;
+    bool isModal = epsSelected;
+    
+    if (isModal) {
+        // Draw fullscreen dim
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 180});
+        
+        // Draw modal box
+        int modalW = 800;
+        int modalH = 500;
+        int modalX = SCREEN_W / 2 - modalW / 2;
+        int modalY = SCREEN_H / 2 - modalH / 2;
+        drawFilledRect(modalX, modalY, modalW, modalH, {30, 30, 45, 255});
+        drawRect(modalX, modalY, modalW, modalH, ACCENT);
+        
+        auto& ep = localEpisodes[currentEpIndex];
+        std::string epLabel = "S" + std::to_string(ep.season) + " E" + std::to_string(ep.episode);
+        
+        if (isLoading) {
+            drawSpinner(SCREEN_W/2, SCREEN_H/2 - 20, 20);
+            drawTextCentered("Loading streams for " + epLabel + "...", SCREEN_W/2, SCREEN_H/2 + 20, TEXT_PRIMARY);
+            drawTextCentered("Press [B] or tap outside to cancel", SCREEN_W/2, SCREEN_H/2 + 60, TEXT_SECONDARY, m_fontSmall);
+            return;
         }
-        if (titleClean.size() > 70) titleClean = titleClean.substr(0, 67) + "...";
+        
+        if (localStreams.empty()) {
+            drawTextCentered("No playable streams found for " + epLabel + ".", SCREEN_W/2, SCREEN_H/2, TEXT_SECONDARY);
+            return;
+        }
+        
+        drawText("Available Streams for " + epLabel + ":", modalX + 30, modalY + 30, ACCENT, m_fontNormal);
+        
+        int streamsStartY = modalY + 80;
+        int maxVisible = 9;
+        int startIndex = 0;
+        if (currentSelIndex >= maxVisible) {
+            startIndex = currentSelIndex - maxVisible + 1;
+        }
 
-        if (!titleClean.empty()) label += " — " + titleClean;
-        if (label.size() > 90) label = label.substr(0, 87) + "...";
+        int y = streamsStartY;
+        if (startIndex > 0) {
+            drawText("^ More streams above...", modalX + 30, y - 18, TEXT_SECONDARY, m_fontSmall);
+        }
 
-        drawText(label, infoX + 5, y + 4, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
-        y += 40;
-    }
+        for (int i = startIndex; i < (int)localStreams.size() && i < startIndex + maxVisible; i++) {
+            bool sel = (i == currentSelIndex);
+            if (sel) drawFilledRect(modalX + 25, y - 2, modalW - 50, 36, CARD_HL);
 
-    if (startIndex + maxVisible < (int)localStreams.size()) {
-        drawText("v More streams below...", infoX, y + 2, TEXT_SECONDARY, m_fontSmall);
+            auto& s = localStreams[i];
+            std::string label = s.name.empty() ? "Stream " + std::to_string(i+1) : s.name;
+            std::string titleClean;
+            for (char c : s.title) {
+                if (c == '\n' || c == '\r') titleClean += ' ';
+                else titleClean += c;
+            }
+            if (titleClean.size() > 50) titleClean = titleClean.substr(0, 47) + "...";
+
+            if (!titleClean.empty()) label += " — " + titleClean;
+            if (label.size() > 70) label = label.substr(0, 67) + "...";
+
+            drawText(label, modalX + 35, y + 4, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+            y += 40;
+        }
+
+        if (startIndex + maxVisible < (int)localStreams.size()) {
+            drawText("v More streams below...", modalX + 30, y + 2, TEXT_SECONDARY, m_fontSmall);
+        }
+        
+    } else {
+        // NON-MODAL for movies!
+        drawText("Available Streams:", infoX, streamsHeaderY, ACCENT, m_fontNormal);
+        int streamsStartY = streamsHeaderY + 32;
+
+        if (isLoading) {
+            drawSpinner(infoX - 25, streamsStartY + 8, 10);
+            drawText("Querying addons for stream links... Please wait...", infoX, streamsStartY, {150, 200, 255, 255}, m_fontSmall);
+            return;
+        }
+
+        if (localStreams.empty()) {
+            drawText("No playable streams found.", infoX, streamsStartY, TEXT_SECONDARY);
+            return;
+        }
+
+        int remainingH = SCREEN_H - streamsStartY - 40;
+        int maxVisible = remainingH / 40;
+        if (maxVisible < 3) maxVisible = 3;
+
+        int startIndex = 0;
+        if (currentSelIndex >= maxVisible) {
+            startIndex = currentSelIndex - maxVisible + 1;
+        }
+
+        int y = streamsStartY;
+        if (startIndex > 0) {
+            drawText("^ More streams above...", infoX, y - 18, TEXT_SECONDARY, m_fontSmall);
+        }
+
+        for (int i = startIndex; i < (int)localStreams.size() && i < startIndex + maxVisible; i++) {
+            bool sel = (i == currentSelIndex);
+            if (sel) drawFilledRect(infoX - 5, y - 2, SCREEN_W - infoX - 40, 36, CARD_HL);
+
+            auto& s = localStreams[i];
+            std::string label = s.name.empty() ? "Stream " + std::to_string(i+1) : s.name;
+            std::string titleClean;
+            for (char c : s.title) {
+                if (c == '\n' || c == '\r') titleClean += ' ';
+                else titleClean += c;
+            }
+            if (titleClean.size() > 70) titleClean = titleClean.substr(0, 67) + "...";
+
+            if (!titleClean.empty()) label += " — " + titleClean;
+            if (label.size() > 90) label = label.substr(0, 87) + "...";
+
+            drawText(label, infoX + 5, y + 4, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+            y += 40;
+        }
+
+        if (startIndex + maxVisible < (int)localStreams.size()) {
+            drawText("v More streams below...", infoX, y + 2, TEXT_SECONDARY, m_fontSmall);
+        }
     }
 }
 
@@ -3294,20 +3425,31 @@ void App::handleDrag(int dx, int dy) {
     }
 
     case Screen::DETAIL: {
+        bool epsSelected = false;
+        std::vector<Video> localEpisodes;
         std::vector<Stream> localStreams;
         {
             std::lock_guard<std::mutex> lock(m_streamsMutex);
+            epsSelected = m_detailEpisodeSelected;
+            localEpisodes = m_detailEpisodes;
             localStreams = m_detailStreams;
         }
-        if (localStreams.empty()) return;
 
         m_dragAccumY += dy;
         if (abs(m_dragAccumY) >= 15) {
             int diff = -m_dragAccumY / 15;
-            int prev = m_detailStreamIndex;
-            m_detailStreamIndex = std::clamp(m_detailStreamIndex + diff, 0, (int)localStreams.size() - 1);
-            m_dragAccumY = 0;
-            printf("[Touch] Drag DETAIL Index: %d -> %d\n", prev, m_detailStreamIndex);
+            
+            if (!epsSelected && !localEpisodes.empty()) {
+                int prev = m_detailEpisodeIndex;
+                m_detailEpisodeIndex = std::clamp(m_detailEpisodeIndex + diff, 0, (int)localEpisodes.size() - 1);
+                m_dragAccumY = 0;
+                printf("[Touch] Drag DETAIL Episode Index: %d -> %d\n", prev, m_detailEpisodeIndex);
+            } else if (!localStreams.empty()) {
+                int prev = m_detailStreamIndex;
+                m_detailStreamIndex = std::clamp(m_detailStreamIndex + diff, 0, (int)localStreams.size() - 1);
+                m_dragAccumY = 0;
+                printf("[Touch] Drag DETAIL Stream Index: %d -> %d\n", prev, m_detailStreamIndex);
+            }
         }
         break;
     }
