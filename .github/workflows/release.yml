@@ -39,6 +39,13 @@ jobs:
         run: |
           mv switchstream.nro SwitchStream.nro
 
+      - name: Upload NRO Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SwitchStream
+          path: SwitchStream.nro
+          compression-level: 0
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
