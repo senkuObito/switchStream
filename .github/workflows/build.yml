@@ -45,8 +45,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Cache devkitPro
+        id: cache-devkitpro
+        uses: actions/cache@v4
+        with:
+          path: /opt/devkitpro
+          key: ${{ runner.os }}-devkitpro-${{ hashFiles('.github/workflows/build.yml') }}
+
       - name: Install Switch Dependencies
+        if: steps.cache-devkitpro.outputs.cache-hit != 'true'
         run: |
+          # Configure pacman to use a custom User-Agent to bypass Cloudflare 403 blocks
+          CONF_FILES="/etc/pacman.conf /opt/devkitpro/pacman/etc/pacman.conf"
+          for f in $CONF_FILES; do
+            if [ -f "$f" ]; then
+              echo "Configuring User-Agent in $f"
+              if grep -q "XferCommand" "$f"; then
+                sed -i 's|^#\?XferCommand.*|XferCommand = /usr/bin/curl -A "dkp-pacman" -g -r %r -o %o %u|' "$f"
+              else
+                sed -i '/\[options\]/a XferCommand = /usr/bin/curl -A "dkp-pacman" -g -r %r -o %o %u' "$f"
+              fi
+            fi
+          done
+
+          # Install dependencies
           dkp-pacman -Sy --noconfirm
           dkp-pacman -S --noconfirm \
             switch-dev \
