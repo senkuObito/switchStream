@@ -149,8 +149,7 @@ bool App::init() {
     m_addonManager.loadConfig(CONFIG_FILE);
     m_library.load(LIB_FILE);
 
-    if (m_addonManager.getAddons().empty()) {
-        printf("Pre-populating default Stremio addons... please wait (this happens only on first run)\n");
+    {
         const std::vector<std::string> defaultAddons = {
             "https://v3-cinemeta.strem.io/manifest.json",
             "https://torrentio.strem.fun/manifest.json",
@@ -165,11 +164,25 @@ bool App::init() {
             "https://sword-watch.vercel.app/manifest.json",
             "https://nagare.nexioapp.org/manifest.json"
         };
+        bool updatedAddons = false;
+        auto currentAddons = m_addonManager.getAddons();
         for (const auto& url : defaultAddons) {
-            printf("Installing: %s\n", url.c_str());
-            m_addonManager.installAddon(url);
+            bool found = false;
+            for (const auto& a : currentAddons) {
+                if (a.transportUrl == url) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                printf("Installing missing default addon: %s\n", url.c_str());
+                m_addonManager.installAddon(url);
+                updatedAddons = true;
+            }
         }
-        m_addonManager.saveConfig(CONFIG_FILE);
+        if (updatedAddons) {
+            m_addonManager.saveConfig(CONFIG_FILE);
+        }
     }
 
     // Load home catalogs

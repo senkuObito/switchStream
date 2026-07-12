@@ -78,8 +78,9 @@ bool AddonManager::loadConfig(const std::string& configPath) {
             }
 
             // Try to fetch manifest (will fall back to lazy/on-the-fly fetching if network is not ready)
-            m_client.fetchManifest(url, addon.manifest);
-
+            // (REMOVED: Do not fetch manifests synchronously during startup to avoid black screen delays)
+            // Manifests will be fetched asynchronously by ensureManifest when needed.
+            
             {
                 std::lock_guard<std::mutex> lock(m_addonsMutex);
                 m_addons.push_back(std::move(addon));
