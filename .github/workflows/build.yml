@@ -61,12 +61,15 @@ jobs:
             if [ -f "$f" ]; then
               echo "Configuring User-Agent in $f"
               if grep -q "XferCommand" "$f"; then
-                sed -i 's|^#\?XferCommand.*|XferCommand = /usr/bin/curl -A "dkp-pacman" -g -r %r -o %o %u|' "$f"
+                sed -i 's|^#\?XferCommand.*|XferCommand = /usr/bin/curl -A "dkp-pacman" -g -L -C - -o %o %u|' "$f"
               else
-                sed -i '/\[options\]/a XferCommand = /usr/bin/curl -A "dkp-pacman" -g -r %r -o %o %u' "$f"
+                sed -i '/\[options\]/a XferCommand = /usr/bin/curl -A "dkp-pacman" -g -L -C - -o %o %u' "$f"
               fi
             fi
           done
+
+          # Clear any corrupted sync databases
+          rm -rf /var/lib/pacman/sync/*
 
           # Install dependencies
           dkp-pacman -Sy --noconfirm
