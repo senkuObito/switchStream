@@ -1,0 +1,76 @@
+name: Build Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-linux:
+    name: Build Linux Simulator
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libsdl2-dev \
+            libsdl2-ttf-dev \
+            libsdl2-image-dev \
+            libcurl4-openssl-dev \
+            rapidjson-dev \
+            libmpv-dev
+
+      - name: Compile Simulator
+        run: make -f Makefile.linux
+
+      - name: Upload Linux Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: switchstream_sim
+          path: switchstream_sim
+
+  build-switch:
+    name: Build Switch Homebrew (NRO)
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Switch Dependencies
+        run: |
+          dkp-pacman -Sy --noconfirm
+          dkp-pacman -S --noconfirm \
+            switch-dev \
+            switch-sdl2 \
+            switch-sdl2_ttf \
+            switch-sdl2_image \
+            switch-curl \
+            switch-mbedtls \
+            switch-zlib \
+            switch-libpng \
+            switch-libjpeg-turbo \
+            switch-rapidjson \
+            switch-mpv
+
+      - name: Compile NRO
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          make
+
+      - name: Upload Switch NRO
+        uses: actions/upload-artifact@v4
+        with:
+          name: switchstream_nro
+          path: |
+            switchstream.nro
+            switchstream.nacp
+            switchstream.elf
