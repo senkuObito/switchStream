@@ -553,14 +553,60 @@ void App::handleInputForPad(u64 kDown) {
             std::lock_guard<std::mutex> lock(m_streamsMutex);
             if (m_loadingStreams) break;
 
-            if (kDown & HidNpadButton_Down) m_detailStreamIndex++;
-            if (kDown & HidNpadButton_Up) m_detailStreamIndex--;
-            if (m_detailStreamIndex < 0) m_detailStreamIndex = 0;
-            if (m_detailStreamIndex >= (int)m_detailStreams.size())
-                m_detailStreamIndex = (int)m_detailStreams.size() - 1;
-            
-            if (kDown & HidNpadButton_A && !m_detailStreams.empty()) {
-                playStream(m_detailStreams[m_detailStreamIndex]);
+            if (m_detailMeta.type == "series" && !m_detailEpisodeSelected && !m_detailEpisodes.empty()) {
+                if (kDown & HidNpadButton_Down) m_detailEpisodeIndex++;
+                if (kDown & HidNpadButton_Up) m_detailEpisodeIndex--;
+                if (m_detailEpisodeIndex < 0) m_detailEpisodeIndex = 0;
+                if (m_detailEpisodeIndex >= (int)m_detailEpisodes.size())
+                    m_detailEpisodeIndex = (int)m_detailEpisodes.size() - 1;
+                
+                if (kDown & HidNpadButton_A) {
+                    std::string epId = m_detailEpisodes[m_detailEpisodeIndex].id;
+                    m_detailEpisodeSelected = true;
+                    m_detailStreams.clear();
+                    m_detailStreamIndex = 0;
+                    m_loadingStreams = true;
+                    
+                    if (m_detailLoadingThread.joinable()) {
+                        m_detailLoadingThread.join();
+                    }
+                    m_detailLoadingThread = std::thread([this, epId]() {
+                        auto rawStreams = m_addonManager.getAllStreams("series", epId);
+                        std::vector<Stream> loadedStreams;
+                        for (const auto& s : rawStreams) {
+                            bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
+                            if (isTorrentStream) {
+                                if (!m_addonManager.getEnableTorrents()) continue;
+                                if (!s.url.empty()) {
+                                    loadedStreams.push_back(s);
+                                } else if (!s.infoHash.empty()) {
+                                    Stream modified = s;
+                                    modified.url = m_addonManager.getTorrServerHost() + "/stream?link=" + s.infoHash + "&index=" + std::to_string(s.fileIdx > -1 ? s.fileIdx : 1) + "&play";
+                                    loadedStreams.push_back(modified);
+                                }
+                            } else {
+                                if (!s.url.empty() || !s.externalUrl.empty()) {
+                                    loadedStreams.push_back(s);
+                                }
+                            }
+                        }
+                        {
+                            std::lock_guard<std::mutex> lock(m_streamsMutex);
+                            m_detailStreams = std::move(loadedStreams);
+                            m_loadingStreams = false;
+                        }
+                    });
+                }
+            } else {
+                if (kDown & HidNpadButton_Down) m_detailStreamIndex++;
+                if (kDown & HidNpadButton_Up) m_detailStreamIndex--;
+                if (m_detailStreamIndex < 0) m_detailStreamIndex = 0;
+                if (m_detailStreamIndex >= (int)m_detailStreams.size())
+                    m_detailStreamIndex = (int)m_detailStreams.size() - 1;
+                
+                if (kDown & HidNpadButton_A && !m_detailStreams.empty()) {
+                    playStream(m_detailStreams[m_detailStreamIndex]);
+                }
             }
         }
         if (kDown & HidNpadButton_X) {
@@ -1055,17 +1101,87 @@ void App::handleTouch(int x, int y) {
             }
         }
 
-        // Stream items
         bool isLoading = false;
         std::vector<Stream> localStreams;
         int currentSelIndex = 0;
+        bool epsSelected = false;
+        int currentEpIndex = 0;
+        std::vector<Video> localEpisodes;
         {
             std::lock_guard<std::mutex> lock(m_streamsMutex);
             isLoading = m_loadingStreams;
             localStreams = m_detailStreams;
             currentSelIndex = m_detailStreamIndex;
+            epsSelected = m_detailEpisodeSelected;
+            currentEpIndex = m_detailEpisodeIndex;
+            localEpisodes = m_detailEpisodes;
         }
-        if (isLoading || localStreams.empty() || m_loadingDetail) return;
+
+        if (isLoading || m_loadingDetail) return;
+
+        // Episode List Items
+        if (m_detailMeta.type == "series" && !epsSelected && !localEpisodes.empty()) {
+            int maxVisible = 8;
+            int startIndex = 0;
+            if (currentEpIndex >= maxVisible) {
+                startIndex = currentEpIndex - maxVisible + 1;
+            }
+
+            int listY = 240;
+            for (int i = startIndex; i < (int)localEpisodes.size() && i < startIndex + maxVisible; i++) {
+                int itemMinY = listY - 2;
+                int itemMaxY = listY + 34;
+                int itemMinX = infoX - 5;
+                int itemMaxX = SCREEN_W - 40;
+
+                if (x >= itemMinX && x <= itemMaxX && y >= itemMinY && y <= itemMaxY) {
+                    std::string epId = localEpisodes[i].id;
+                    {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        m_detailEpisodeIndex = i;
+                        m_detailEpisodeSelected = true;
+                        m_detailStreams.clear();
+                        m_detailStreamIndex = 0;
+                        m_loadingStreams = true;
+                    }
+                    if (m_detailLoadingThread.joinable()) {
+                        m_detailLoadingThread.join();
+                    }
+                    m_detailLoadingThread = std::thread([this, epId]() {
+                        auto rawStreams = m_addonManager.getAllStreams("series", epId);
+                        std::vector<Stream> loadedStreams;
+                        for (const auto& s : rawStreams) {
+                            bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
+                            if (isTorrentStream) {
+                                if (!m_addonManager.getEnableTorrents()) continue;
+                                if (!s.url.empty()) {
+                                    loadedStreams.push_back(s);
+                                } else if (!s.infoHash.empty()) {
+                                    Stream modified = s;
+                                    modified.url = m_addonManager.getTorrServerHost() + "/stream?link=" + s.infoHash + "&index=" + std::to_string(s.fileIdx > -1 ? s.fileIdx : 1) + "&play";
+                                    loadedStreams.push_back(modified);
+                                }
+                            } else {
+                                if (!s.url.empty() || !s.externalUrl.empty()) {
+                                    loadedStreams.push_back(s);
+                                }
+                            }
+                        }
+                        {
+                            std::lock_guard<std::mutex> lock(m_streamsMutex);
+                            m_detailStreams = std::move(loadedStreams);
+                            m_loadingStreams = false;
+                        }
+                    });
+                    return;
+                }
+                listY += 40;
+            }
+            return;
+        }
+
+        // Stream Items
+        if (localStreams.empty()) return;
 
         int maxVisible = 8;
         int startIndex = 0;
@@ -2083,23 +2199,66 @@ void App::renderDetail() {
 
     // Streams Header (dynamic Y)
     int streamsHeaderY = bookmarkY + 30;
-    drawText("Available Streams:", infoX, streamsHeaderY, ACCENT, m_fontNormal);
 
     bool isLoading = false;
     std::vector<Stream> localStreams;
     int currentSelIndex = 0;
+    bool epsSelected = false;
+    int currentEpIndex = 0;
+    std::vector<Video> localEpisodes;
     {
         std::lock_guard<std::mutex> lock(m_streamsMutex);
         isLoading = m_loadingStreams;
         localStreams = m_detailStreams;
         currentSelIndex = m_detailStreamIndex;
+        epsSelected = m_detailEpisodeSelected;
+        currentEpIndex = m_detailEpisodeIndex;
+        localEpisodes = m_detailEpisodes;
     }
 
+    if (m_detailMeta.type == "series" && !epsSelected && !localEpisodes.empty()) {
+        drawText("Select Episode:", infoX, streamsHeaderY, ACCENT, m_fontNormal);
+        int streamsStartY = streamsHeaderY + 32;
+
+        int remainingH = SCREEN_H - streamsStartY - 40;
+        int maxVisible = remainingH / 40;
+        if (maxVisible < 3) maxVisible = 3;
+
+        int startIndex = 0;
+        if (currentEpIndex >= maxVisible) {
+            startIndex = currentEpIndex - maxVisible + 1;
+        }
+
+        int y = streamsStartY;
+        if (startIndex > 0) {
+            drawText("^ More episodes above...", infoX, y - 18, TEXT_SECONDARY, m_fontSmall);
+        }
+
+        for (int i = startIndex; i < (int)localEpisodes.size() && i < startIndex + maxVisible; i++) {
+            bool sel = (i == currentEpIndex);
+            if (sel) drawFilledRect(infoX - 5, y - 2, SCREEN_W - infoX - 40, 36, CARD_HL);
+
+            auto& ep = localEpisodes[i];
+            std::string label = "S" + std::to_string(ep.season) + " E" + std::to_string(ep.episode);
+            if (!ep.title.empty()) label += " — " + ep.title;
+            if (label.size() > 90) label = label.substr(0, 87) + "...";
+
+            drawText(label, infoX + 5, y + 4, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+            y += 40;
+        }
+
+        if (startIndex + maxVisible < (int)localEpisodes.size()) {
+            drawText("v More episodes below...", infoX, y + 2, TEXT_SECONDARY, m_fontSmall);
+        }
+        return;
+    }
+
+    drawText("Available Streams:", infoX, streamsHeaderY, ACCENT, m_fontNormal);
     int streamsStartY = streamsHeaderY + 32;
 
     if (isLoading) {
         drawSpinner(infoX - 25, streamsStartY + 8, 10);
-        drawText("Querying 15 addons for stream links... Please wait...", infoX, streamsStartY, {150, 200, 255, 255}, m_fontSmall);
+        drawText("Querying addons for stream links... Please wait...", infoX, streamsStartY, {150, 200, 255, 255}, m_fontSmall);
         return;
     }
 
@@ -2732,6 +2891,9 @@ void App::loadDetail(const std::string& type, const std::string& id) {
         m_detailStreams.clear();
         m_detailStreamIndex = 0;
         m_loadingStreams = true;
+        m_detailEpisodeSelected = false;
+        m_detailEpisodeIndex = 0;
+        m_detailEpisodes.clear();
     }
 
     m_detailMeta = MetaItem(); // clear old
@@ -2745,6 +2907,22 @@ void App::loadDetail(const std::string& type, const std::string& id) {
         MetaItem loadedMeta;
         if (m_addonManager.getMeta(type, id, resp)) {
             loadedMeta = resp.meta;
+        }
+
+        if (type == "series" && !loadedMeta.videos.empty()) {
+            std::vector<Video> sortedEps = loadedMeta.videos;
+            std::sort(sortedEps.begin(), sortedEps.end(), [](const Video& a, const Video& b) {
+                if (a.season != b.season) return a.season < b.season;
+                return a.episode < b.episode;
+            });
+            {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                m_detailEpisodes = std::move(sortedEps);
+                m_loadingStreams = false;
+            }
+            m_detailMeta = loadedMeta;
+            m_loadingDetail = false;
+            return;
         }
 
         auto rawStreams = m_addonManager.getAllStreams(type, id);

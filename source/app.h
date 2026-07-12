@@ -99,6 +99,10 @@ private:
     MetaItem m_detailMeta;
     std::vector<Stream> m_detailStreams;
     int m_detailStreamIndex = 0;
+    
+    bool m_detailEpisodeSelected = false;
+    int m_detailEpisodeIndex = 0;
+    std::vector<Video> m_detailEpisodes;
 
     int m_libraryIndex = 0;
     int m_addonIndex = 0;
