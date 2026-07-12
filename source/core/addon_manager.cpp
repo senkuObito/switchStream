@@ -245,31 +245,45 @@ std::vector<CatalogRow> AddonManager::getHomeCatalogs(const std::string& type) {
         localAddons = m_addons;
     }
 
-    for (auto& addon : localAddons) {
+    std::vector<std::future<std::vector<CatalogRow>>> futures;
+
+    for (auto addon : localAddons) {
         if (!addon.enabled) continue;
-        ensureManifest(addon);
+        
+        futures.push_back(std::async(std::launch::async, [this, addon, type]() mutable {
+            std::vector<CatalogRow> rows;
+            ensureManifest(addon);
 
-        for (auto& cat : addon.manifest.catalogs) {
-            if (!type.empty() && cat.type != type) continue;
+            for (auto& cat : addon.manifest.catalogs) {
+                if (!type.empty() && cat.type != type) continue;
 
-            // Skip catalogs that require extra parameters we can't provide
-            if (cat.hasRequiredExtras) continue;
+                // Skip catalogs that require extra parameters we can't provide
+                if (cat.hasRequiredExtras) continue;
 
-            CatalogRow row;
-            row.addonName   = addon.manifest.name;
-            row.catalogName = cat.name.empty() ? cat.id : cat.name;
-            row.type        = cat.type;
-            row.catalogId   = cat.id;
-            row.transportUrl = addon.transportUrl;
+                CatalogRow row;
+                row.addonName   = addon.manifest.name;
+                row.catalogName = cat.name.empty() ? cat.id : cat.name;
+                row.type        = cat.type;
+                row.catalogId   = cat.id;
+                row.transportUrl = addon.transportUrl;
 
-            CatalogResponse resp;
-            if (m_client.fetchCatalog(addon.manifest, cat.type, cat.id, 0, resp)) {
-                row.items = std::move(resp.metas);
+                CatalogResponse resp;
+                if (m_client.fetchCatalog(addon.manifest, cat.type, cat.id, 0, resp)) {
+                    row.items = std::move(resp.metas);
+                }
+
+                if (!row.items.empty()) {
+                    rows.push_back(std::move(row));
+                }
             }
+            return rows;
+        }));
+    }
 
-            if (!row.items.empty()) {
-                rows.push_back(std::move(row));
-            }
+    for (auto& f : futures) {
+        auto fetchedRows = f.get();
+        for (auto& r : fetchedRows) {
+            rows.push_back(std::move(r));
         }
     }
 
@@ -285,32 +299,46 @@ std::vector<MetaItem> AddonManager::search(const std::string& query,
         localAddons = m_addons;
     }
 
-    for (auto& addon : localAddons) {
+    std::vector<std::future<std::vector<MetaItem>>> futures;
+
+    for (auto addon : localAddons) {
         if (!addon.enabled) continue;
-        ensureManifest(addon);
+        
+        futures.push_back(std::async(std::launch::async, [this, addon, query, type]() mutable {
+            std::vector<MetaItem> addonResults;
+            ensureManifest(addon);
 
-        for (auto& cat : addon.manifest.catalogs) {
-            if (!type.empty() && cat.type != type) continue;
+            for (auto& cat : addon.manifest.catalogs) {
+                if (!type.empty() && cat.type != type) continue;
 
-            // Only search catalogs that explicitly support search
-            bool supportsSearch = false;
-            for (auto& extra : cat.extraSupported) {
-                if (extra == "search") { supportsSearch = true; break; }
-            }
-            if (!supportsSearch) continue;
-
-            CatalogResponse resp;
-            if (m_client.searchCatalog(addon.manifest, cat.type, cat.id, query, resp)) {
-                printf("[AddonManager] Addon '%s' (%s) returned %zu search results for query '%s'\n",
-                       addon.manifest.name.c_str(), cat.type.c_str(), resp.metas.size(), query.c_str());
-                for (auto& meta : resp.metas) {
-                    meta.addonName = addon.manifest.name;
-                    results.push_back(std::move(meta));
+                // Only search catalogs that explicitly support search
+                bool supportsSearch = false;
+                for (auto& extra : cat.extraSupported) {
+                    if (extra == "search") { supportsSearch = true; break; }
                 }
-            } else {
-                printf("[AddonManager] Addon '%s' (%s) search failed for query '%s'\n",
-                       addon.manifest.name.c_str(), cat.type.c_str(), query.c_str());
+                if (!supportsSearch) continue;
+
+                CatalogResponse resp;
+                if (m_client.searchCatalog(addon.manifest, cat.type, cat.id, query, resp)) {
+                    printf("[AddonManager] Addon '%s' (%s) returned %zu search results for query '%s'\n",
+                           addon.manifest.name.c_str(), cat.type.c_str(), resp.metas.size(), query.c_str());
+                    for (auto& meta : resp.metas) {
+                        meta.addonName = addon.manifest.name;
+                        addonResults.push_back(std::move(meta));
+                    }
+                } else {
+                    printf("[AddonManager] Addon '%s' (%s) search failed for query '%s'\n",
+                           addon.manifest.name.c_str(), cat.type.c_str(), query.c_str());
+                }
             }
+            return addonResults;
+        }));
+    }
+
+    for (auto& f : futures) {
+        auto fetchedResults = f.get();
+        for (auto& r : fetchedResults) {
+            results.push_back(std::move(r));
         }
     }
 
@@ -347,11 +375,11 @@ std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
     std::vector<std::future<std::vector<Stream>>> futures;
 
     for (auto& addon : localAddons) {
-        ensureManifest(addon);
-        if (!addonHandles(addon, "stream", type, videoId)) continue;
-
-        futures.push_back(std::async(std::launch::async, [this, addon, type, videoId]() {
+        futures.push_back(std::async(std::launch::async, [this, addon, type, videoId]() mutable {
             std::vector<Stream> streams;
+            ensureManifest(addon);
+            if (!addonHandles(addon, "stream", type, videoId)) return streams;
+
             StreamResponse resp;
             if (m_client.fetchStreams(addon.manifest, type, videoId, resp)) {
                 for (auto& s : resp.streams) {
@@ -384,11 +412,11 @@ std::vector<Subtitle> AddonManager::getAllSubtitles(const std::string& type,
     std::vector<std::future<std::vector<Subtitle>>> futures;
 
     for (auto& addon : localAddons) {
-        ensureManifest(addon);
-        if (!addonHandles(addon, "subtitles", type, id)) continue;
-
-        futures.push_back(std::async(std::launch::async, [this, addon, type, id]() {
+        futures.push_back(std::async(std::launch::async, [this, addon, type, id]() mutable {
             std::vector<Subtitle> subs;
+            ensureManifest(addon);
+            if (!addonHandles(addon, "subtitles", type, id)) return subs;
+
             SubtitleResponse resp;
             if (m_client.fetchSubtitles(addon.manifest, type, id, resp)) {
                 for (auto& s : resp.subtitles) {
