@@ -159,7 +159,11 @@ bool App::init() {
             "https://free.flixnest.app/manifest.json",
             "https://opensubtitles-v3.strem.io/manifest.json",
             "https://watchhub.strem.io/manifest.json",
-            "https://anime-kitsu.strem.fun/manifest.json"
+            "https://anime-kitsu.strem.fun/manifest.json",
+            "https://badboysxs-morpheus.hf.space/manifest.json",
+            "https://stremio.yukistreams.xyz/manifest.json",
+            "https://sword-watch.vercel.app/manifest.json",
+            "https://nagare.nexioapp.org/manifest.json"
         };
         for (const auto& url : defaultAddons) {
             printf("Installing: %s\n", url.c_str());
@@ -861,7 +865,11 @@ void App::handleInputForPad(u64 kDown) {
                         "https://free.flixnest.app/manifest.json",
                         "https://opensubtitles-v3.strem.io/manifest.json",
                         "https://watchhub.strem.io/manifest.json",
-                        "https://anime-kitsu.strem.fun/manifest.json"
+                        "https://anime-kitsu.strem.fun/manifest.json",
+                        "https://badboysxs-morpheus.hf.space/manifest.json",
+                        "https://stremio.yukistreams.xyz/manifest.json",
+                        "https://sword-watch.vercel.app/manifest.json",
+                        "https://nagare.nexioapp.org/manifest.json"
                     };
                     for (const auto& url : defaultAddons) {
                         m_addonManager.installAddon(url);
@@ -1207,7 +1215,11 @@ void App::handleTouch(int x, int y) {
                             "https://free.flixnest.app/manifest.json",
                             "https://opensubtitles-v3.strem.io/manifest.json",
                             "https://watchhub.strem.io/manifest.json",
-                            "https://anime-kitsu.strem.fun/manifest.json"
+                            "https://anime-kitsu.strem.fun/manifest.json",
+                            "https://badboysxs-morpheus.hf.space/manifest.json",
+                            "https://stremio.yukistreams.xyz/manifest.json",
+                            "https://sword-watch.vercel.app/manifest.json",
+                            "https://nagare.nexioapp.org/manifest.json"
                         };
                         for (const auto& url : defaultAddons) {
                             m_addonManager.installAddon(url);
