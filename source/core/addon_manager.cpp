@@ -250,7 +250,7 @@ std::vector<CatalogRow> AddonManager::getHomeCatalogs(const std::string& type) {
     for (auto addon : localAddons) {
         if (!addon.enabled) continue;
         
-        futures.push_back(std::async(std::launch::async, [this, addon, type]() mutable {
+        futures.push_back(std::async(std::launch::deferred, [this, addon, type]() mutable {
             std::vector<CatalogRow> rows;
             ensureManifest(addon);
 
@@ -304,7 +304,7 @@ std::vector<MetaItem> AddonManager::search(const std::string& query,
     for (auto addon : localAddons) {
         if (!addon.enabled) continue;
         
-        futures.push_back(std::async(std::launch::async, [this, addon, query, type]() mutable {
+        futures.push_back(std::async(std::launch::deferred, [this, addon, query, type]() mutable {
             std::vector<MetaItem> addonResults;
             ensureManifest(addon);
 
@@ -375,7 +375,7 @@ std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
     std::vector<std::future<std::vector<Stream>>> futures;
 
     for (auto& addon : localAddons) {
-        futures.push_back(std::async(std::launch::async, [this, addon, type, videoId]() mutable {
+        futures.push_back(std::async(std::launch::deferred, [this, addon, type, videoId]() mutable {
             std::vector<Stream> streams;
             ensureManifest(addon);
             if (!addonHandles(addon, "stream", type, videoId)) return streams;
@@ -412,7 +412,7 @@ std::vector<Subtitle> AddonManager::getAllSubtitles(const std::string& type,
     std::vector<std::future<std::vector<Subtitle>>> futures;
 
     for (auto& addon : localAddons) {
-        futures.push_back(std::async(std::launch::async, [this, addon, type, id]() mutable {
+        futures.push_back(std::async(std::launch::deferred, [this, addon, type, id]() mutable {
             std::vector<Subtitle> subs;
             ensureManifest(addon);
             if (!addonHandles(addon, "subtitles", type, id)) return subs;

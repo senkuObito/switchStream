@@ -18,6 +18,8 @@
 #include <set>
 #include <thread>
 #include <atomic>
+#include <stdexcept>
+#include <exception>
 #include <condition_variable>
 
 namespace ss {
@@ -110,10 +112,10 @@ private:
     bool m_addonDiscoverPane = false;
     int m_addonDiscoverIndex = 0;
     int m_settingsIndex = 0;
-    bool m_loading = false;
-    bool m_loadingStreams = false;
+    std::atomic<bool> m_loading{false};
+    std::atomic<bool> m_loadingStreams{false};
     std::mutex m_streamsMutex;
-    bool m_loadingHome = false;
+    std::atomic<bool> m_loadingHome{false};
     std::mutex m_homeMutex;
 
     // TorrServer torrent stats polling
@@ -126,10 +128,10 @@ private:
     std::mutex m_torrentMutex;
     std::thread m_torrentPollingThread;
     std::thread m_homeLoadingThread;
-    bool m_loadingSearch = false;
+    std::atomic<bool> m_loadingSearch{false};
     std::mutex m_searchMutex;
     std::thread m_searchThread;
-    bool m_loadingDetail = false;
+    std::atomic<bool> m_loadingDetail{false};
     std::thread m_detailLoadingThread;
     std::atomic<int> m_detailGeneration{0};
     std::thread m_installThread;

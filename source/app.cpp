@@ -608,10 +608,9 @@ void App::handleInputForPad(u64 kDown) {
                             }
                         }
                         
-                        if (m_detailGeneration.load() != currentGen) return;
-                        
                         {
                             std::lock_guard<std::mutex> lock(m_streamsMutex);
+                            if (m_detailGeneration.load() != currentGen) return;
                             m_detailStreams = std::move(loadedStreams);
                             m_loadingStreams = false;
                         }
@@ -1237,10 +1236,9 @@ void App::handleTouch(int x, int y) {
                             }
                         }
                         
-                        if (m_detailGeneration.load() != currentGen) return;
-                        
                         {
                             std::lock_guard<std::mutex> lock(m_streamsMutex);
+                            if (m_detailGeneration.load() != currentGen) return;
                             m_detailStreams = std::move(loadedStreams);
                             m_loadingStreams = false;
                         }
@@ -3031,14 +3029,16 @@ void App::sortSearchResults() {
 
 void App::loadDetail(const std::string& type, const std::string& id) {
     m_loadingDetail = true;
+    m_loadingStreams = true;
+    m_detailEpisodeSelected = false;
+    m_detailEpisodeIndex = 0;
+    m_detailStreamIndex = 0;
+    int currentGen;
     {
         std::lock_guard<std::mutex> lock(m_streamsMutex);
         m_detailStreams.clear();
-        m_detailStreamIndex = 0;
-        m_loadingStreams = true;
-        m_detailEpisodeSelected = false;
-        m_detailEpisodeIndex = 0;
         m_detailEpisodes.clear();
+        currentGen = ++m_detailGeneration;
     }
 
     m_detailMeta = MetaItem(); // clear old
@@ -3046,8 +3046,6 @@ void App::loadDetail(const std::string& type, const std::string& id) {
     if (m_detailLoadingThread.joinable()) {
         m_detailLoadingThread.detach();
     }
-    
-    int currentGen = ++m_detailGeneration;
 
     m_detailLoadingThread = std::thread([this, type, id, currentGen]() {
         MetaResponse resp;
@@ -3062,14 +3060,14 @@ void App::loadDetail(const std::string& type, const std::string& id) {
                 if (a.season != b.season) return a.season < b.season;
                 return a.episode < b.episode;
             });
-            if (m_detailGeneration.load() != currentGen) return;
             {
                 std::lock_guard<std::mutex> lock(m_streamsMutex);
+                if (m_detailGeneration.load() != currentGen) return;
                 m_detailEpisodes = std::move(sortedEps);
                 m_detailMeta = std::move(loadedMeta);
                 m_loadingStreams = false;
+                m_loadingDetail = false;
             }
-            m_loadingDetail = false;
             return;
         }
 
@@ -3089,10 +3087,7 @@ void App::loadDetail(const std::string& type, const std::string& id) {
                     loadedStreams.push_back(conv);
                 }
             } else {
-                // Must have a playable URL — skip externalUrl-only entries
-                // (e.g. PenguPlay donor notices that have no stream URL)
                 if (!s.url.empty()) {
-                    // Only accept http/https URLs
                     bool isHttp = s.url.rfind("http", 0) == 0;
                     if (!isHttp) {
                         printf("[loadDetail] Skipping non-http URL: %s\n", s.url.substr(0,60).c_str());
@@ -3110,14 +3105,14 @@ void App::loadDetail(const std::string& type, const std::string& id) {
             }
         }
 
-        if (m_detailGeneration.load() != currentGen) return;
         {
             std::lock_guard<std::mutex> lock(m_streamsMutex);
+            if (m_detailGeneration.load() != currentGen) return;
             m_detailMeta = std::move(loadedMeta);
             m_detailStreams = std::move(loadedStreams);
             m_loadingStreams = false;
+            m_loadingDetail = false;
         }
-        m_loadingDetail = false;
     });
 }
 
