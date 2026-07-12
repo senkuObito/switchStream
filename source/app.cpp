@@ -52,6 +52,7 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
 
     // --- Stream Addons (provide playable stream links) ---
     {"Torrentio", "Torrent streams from YTS, RARBG, 1337x, etc.", "https://torrentio.strem.fun/manifest.json"},
+    {"Pengu", "Multi-source scraping stream addon (configured for 1080p/720p/480p).", "https://pengu.uk/%7B%22source_111477%22%3A%22on%22%2C%22source_4khdhub%22%3A%22on%22%2C%22source_cinefreak%22%3A%22on%22%2C%22source_aniwaves%22%3A%22on%22%2C%22source_moviebox%22%3A%22on%22%2C%22source_moviesdrives%22%3A%22on%22%2C%22source_allmovieland%22%3A%22on%22%2C%22source_overflix%22%3A%22on%22%2C%22source_vaplayer%22%3A%22on%22%2C%22source_vidking%22%3A%22on%22%2C%22source_animesuge%22%3A%22on%22%2C%22source_aether%22%3A%22on%22%2C%22source_vidlink%22%3A%22on%22%2C%22source_hdghartv%22%3A%22on%22%2C%22source_scloud%22%3A%22on%22%2C%22res_2160%22%3A%22on%22%2C%22res_1080%22%3A%22on%22%2C%22res_720%22%3A%22on%22%2C%22res_480%22%3A%22on%22%2C%22disable_direct%22%3A%22on%22%7D/manifest.json"},
     {"Comet | ElfHosted", "Fast torrent/debrid stream search.", "https://comet.elfhosted.com/manifest.json"},
     {"KnightCrawler", "Alternative torrent and debrid stream search.", "https://knightcrawler.elfhosted.com/manifest.json"},
     {"Debrid Search", "Search and stream files directly from your Debrid torrent cloud cache.", "https://debrid-search.strem.fun/manifest.json"},
