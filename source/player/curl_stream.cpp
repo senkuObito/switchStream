@@ -5,7 +5,7 @@
 
 namespace ss {
 
-static const size_t RING_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB
+static const size_t RING_BUFFER_SIZE = 8 * 1024 * 1024; // 8MB — prevents stutter at 1080p (5Mbps fills 2MB in ~3s)
 
 CurlStream::CurlStream(const std::string& url, const std::string& headers)
     : m_url(url), m_headers(headers), m_buffer(RING_BUFFER_SIZE) {
@@ -110,14 +110,29 @@ void CurlStream::curlThreadFunc(int64_t offset) {
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
-    // Custom headers
+    // Only set a fallback UA if the stream headers don't already supply one.
+    // Sending two User-Agent headers causes some CDNs to reject the request.
+    bool hasCustomUA = (m_headers.find("User-Agent:") != std::string::npos ||
+                        m_headers.find("user-agent:") != std::string::npos);
+    if (!hasCustomUA) {
+        curl_easy_setopt(curl, CURLOPT_USERAGENT,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    }
+
+    // Custom headers (Referer, auth tokens, etc. from stream behaviorHints.proxyHeaders)
     struct curl_slist* chunk = nullptr;
     if (!m_headers.empty()) {
         size_t pos = 0;
         while (pos < m_headers.length()) {
-            size_t next = m_headers.find(',', pos);
+            size_t next = m_headers.find('\n', pos);
             std::string header = m_headers.substr(pos, next - pos);
-            chunk = curl_slist_append(chunk, header.c_str());
+            if (!header.empty() && header.back() == '\r') {
+                header.pop_back();
+            }
+            if (!header.empty()) {
+                chunk = curl_slist_append(chunk, header.c_str());
+            }
             if (next == std::string::npos) break;
             pos = next + 1;
         }

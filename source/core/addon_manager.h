@@ -82,6 +82,9 @@ public:
     void setEnableTorrents(bool enable) { m_enableTorrents = enable; }
 
 private:
+    // Ensure manifest is fetched on the fly if it failed at startup
+    void ensureManifest(InstalledAddon& addon);
+
     // Check if addon handles this resource for this type/id
     bool addonHandles(const InstalledAddon& addon,
                       const std::string& resource,

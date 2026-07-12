@@ -19,14 +19,14 @@
 static constexpr int SCREEN_W = 1280;
 static constexpr int SCREEN_H = 720;
 
-// Color palette — dark theme
-static constexpr SDL_Color BG_COLOR      = {18, 18, 24, 255};
-static constexpr SDL_Color CARD_COLOR    = {30, 30, 42, 255};
-static constexpr SDL_Color CARD_HL       = {55, 55, 80, 255};
+// Color palette — true black theme
+static constexpr SDL_Color BG_COLOR      = {0,  0,  0,   255}; // true black
+static constexpr SDL_Color CARD_COLOR    = {8,  8,  8,   255}; // near-black card
+static constexpr SDL_Color CARD_HL       = {28, 28, 40,  255}; // dark highlight
 static constexpr SDL_Color ACCENT        = {100, 120, 255, 255};
 static constexpr SDL_Color TEXT_PRIMARY   = {240, 240, 245, 255};
 static constexpr SDL_Color TEXT_SECONDARY = {150, 150, 170, 255};
-static constexpr SDL_Color NAV_BG        = {12, 12, 18, 255};
+static constexpr SDL_Color NAV_BG        = {0,  0,  0,   255}; // true black
 
 // Poster dimensions
 static constexpr int POSTER_W = 150;
@@ -53,6 +53,10 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     // --- Stream Addons (provide playable stream links) ---
     {"Torrentio", "Torrent streams from YTS, RARBG, 1337x, etc.", "https://torrentio.strem.fun/manifest.json"},
     {"Pengu", "Multi-source scraping stream addon (configured for 1080p/720p/480p).", "https://pengu.uk/%7B%22source_111477%22%3A%22on%22%2C%22source_4khdhub%22%3A%22on%22%2C%22source_cinefreak%22%3A%22on%22%2C%22source_aniwaves%22%3A%22on%22%2C%22source_moviebox%22%3A%22on%22%2C%22source_moviesdrives%22%3A%22on%22%2C%22source_allmovieland%22%3A%22on%22%2C%22source_overflix%22%3A%22on%22%2C%22source_vaplayer%22%3A%22on%22%2C%22source_vidking%22%3A%22on%22%2C%22source_animesuge%22%3A%22on%22%2C%22source_aether%22%3A%22on%22%2C%22source_vidlink%22%3A%22on%22%2C%22source_hdghartv%22%3A%22on%22%2C%22source_scloud%22%3A%22on%22%2C%22res_2160%22%3A%22on%22%2C%22res_1080%22%3A%22on%22%2C%22res_720%22%3A%22on%22%2C%22res_480%22%3A%22on%22%2C%22disable_direct%22%3A%22on%22%7D/manifest.json"},
+    {"Flix Streams", "HTTP streams from multiple sources.", "https://flixnest.app/flix-streams/manifest.json"},
+    {"Nebula Streams", "HTTP streams from multiple sources.", "https://nebulastreams.onrender.com/manifest.json"},
+    {"MovieBox", "HTTP streams for movies and series.", "https://moviebox-cfa7.onrender.com/manifest.json"},
+    {"Sword Watch", "HTTP streams (currently offline - Vercel deployment disabled).", "https://sword-watch.vercel.app/manifest.json"},
     {"Comet | ElfHosted", "Fast torrent/debrid stream search.", "https://comet.elfhosted.com/manifest.json"},
     {"KnightCrawler", "Alternative torrent and debrid stream search.", "https://knightcrawler.elfhosted.com/manifest.json"},
     {"Debrid Search", "Search and stream files directly from your Debrid torrent cloud cache.", "https://debrid-search.strem.fun/manifest.json"},
@@ -703,6 +707,30 @@ void App::handleInputForPad(u64 kDown) {
                 }
                 break;
             }
+            if (m_showQualityList) {
+                m_osdShowTime = now;
+                std::vector<Stream> localStreams;
+                {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    localStreams = m_detailStreams;
+                }
+                if (kDown & HidNpadButton_Up) {
+                    m_qualityListIndex = std::clamp(m_qualityListIndex - 1, 0, (int)localStreams.size() - 1);
+                }
+                else if (kDown & HidNpadButton_Down) {
+                    m_qualityListIndex = std::clamp(m_qualityListIndex + 1, 0, (int)localStreams.size() - 1);
+                }
+                else if (kDown & HidNpadButton_A) {
+                    if (!localStreams.empty()) {
+                        playStream(localStreams[m_qualityListIndex]);
+                    }
+                    m_showQualityList = false;
+                }
+                else if (kDown & HidNpadButton_B) {
+                    m_showQualityList = false;
+                }
+                break;
+            }
 
             if (!isOsdVisible) {
                 // If controls are hidden, B exits immediately.
@@ -762,6 +790,11 @@ void App::handleInputForPad(u64 kDown) {
                             break;
                         }
                     }
+                }
+                else if (kDown & HidNpadButton_L) {
+                    // L button opens quality/stream switcher
+                    m_showQualityList = true;
+                    m_qualityListIndex = m_detailStreamIndex;
                 }
             }
         }
@@ -1270,6 +1303,42 @@ void App::handleTouch(int x, int y) {
             return;
         }
 
+        if (m_showQualityList) {
+            int qualW = 640;
+            int qualH = 420;
+            int qualX = SCREEN_W/2 - qualW/2;
+            int qualY = SCREEN_H/2 - qualH/2;
+
+            if (x >= qualX && x <= qualX + qualW && y >= qualY && y <= qualY + qualH) {
+                std::vector<Stream> localStreams;
+                {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    localStreams = m_detailStreams;
+                }
+                int maxVis = 7;
+                int startIdx = 0;
+                if (m_qualityListIndex >= maxVis) startIdx = m_qualityListIndex - maxVis + 1;
+
+                int rowY = qualY + 65;
+                for (int i = startIdx; i < (int)localStreams.size() && i < startIdx + maxVis; i++) {
+                    if (x >= qualX + 20 && x <= qualX + qualW - 20 && y >= rowY && y <= rowY + 42) {
+                        m_qualityListIndex = i;
+                        m_showQualityList = false;
+                        printf("[Touch] Quality stream %d selected\n", i);
+                        playStream(localStreams[i]);
+                        m_osdShowTime = now;
+                        return;
+                    }
+                    rowY += 48;
+                }
+            } else {
+                // Click outside closes quality list
+                m_showQualityList = false;
+                m_osdShowTime = now;
+            }
+            return;
+        }
+
         // 2. Check Double Tap
         if (now - m_lastTapTime < 350) {
             // Double tap detected!
@@ -1308,9 +1377,10 @@ void App::handleTouch(int x, int y) {
         int btnSeekRW = 80;
         int btnSubW = 60;
         int btnAudW = 60;
-        int btnGap = 25;
+        int btnQualW = 60;
+        int btnGap = 20;
 
-        int totalRowW = btnBackW + btnSeekLW + btnPlayW + btnSeekRW + btnSubW + btnAudW + (5 * btnGap);
+        int totalRowW = btnBackW + btnSeekLW + btnPlayW + btnSeekRW + btnSubW + btnAudW + btnQualW + (6 * btnGap);
         int rowStartX = panelX + (panelW - totalRowW) / 2;
 
         int backX = rowStartX;
@@ -1319,6 +1389,7 @@ void App::handleTouch(int x, int y) {
         int seekRX = pillX + btnPlayW + btnGap;
         int utilX = seekRX + btnSeekRW + btnGap;
         int audX = utilX + btnSubW + btnGap;
+        int qualX = audX + btnAudW + btnGap;
 
         int barX = panelX + 30;
         int barY = panelY + 26;
@@ -1379,6 +1450,11 @@ void App::handleTouch(int x, int y) {
                     }
                 }
                 printf("[Touch] Audio menu opened\n");
+            }
+            else if (x >= qualX && x <= qualX + btnQualW) {
+                m_showQualityList = true;
+                m_qualityListIndex = m_detailStreamIndex;
+                printf("[Touch] Quality menu opened\n");
             }
         }
         break;
@@ -1471,7 +1547,7 @@ void App::renderPlayer() {
         int cardH = 320;
 
         // Glassmorphic card body
-        drawFilledRoundRect(cardX, cardY, cardW, cardH, 12, {20, 22, 36, 210});
+        drawFilledRoundRect(cardX, cardY, cardW, cardH, 12, {0, 0, 0, 230});
         
         // Specular glass borders
         drawRoundRect(cardX, cardY, cardW, cardH, 12, {255, 255, 255, 35});
@@ -1532,7 +1608,7 @@ void App::renderPlayer() {
     } else {
         // ─── Modern Glassmorphic Player OSD & Buffering ───
         uint32_t now = SDL_GetTicks();
-        bool showOsd = (now - m_osdShowTime < 4000) || m_isScrubbing || m_showSubList || m_showAudioList;
+        bool showOsd = (now - m_osdShowTime < 4000) || m_isScrubbing || m_showSubList || m_showAudioList || m_showQualityList;
         bool buffering = m_player.isBuffering();
 
         // 1. Render the video frame first
@@ -1548,7 +1624,7 @@ void App::renderPlayer() {
 
             // ─── Top Info Bar (glassmorphic) ───
             int topBarH = 50;
-            drawFilledRect(0, 0, SCREEN_W, topBarH, {10, 10, 18, 180});
+            drawFilledRect(0, 0, SCREEN_W, topBarH, {0, 0, 0, 210});
             drawFilledRect(0, topBarH - 1, SCREEN_W, 1, {255, 255, 255, 15});
 
             std::string title = m_detailMeta.name;
@@ -1565,7 +1641,7 @@ void App::renderPlayer() {
             int panelY = SCREEN_H - panelH - 30;
 
             // Frosted glass body
-            drawFilledRoundRect(panelX, panelY, panelW, panelH, 14, {18, 20, 32, 200});
+            drawFilledRoundRect(panelX, panelY, panelW, panelH, 14, {0, 0, 0, 220});
 
             // Glass specular highlights
             drawRoundRect(panelX, panelY, panelW, panelH, 14, {255, 255, 255, 25});
@@ -1600,9 +1676,10 @@ void App::renderPlayer() {
             int btnSeekRW = 80;
             int btnSubW = 60;
             int btnAudW = 60;
-            int btnGap = 25;
+            int btnQualW = 60;
+            int btnGap = 20;
 
-            int totalRowW = btnBackW + btnSeekLW + btnPlayW + btnSeekRW + btnSubW + btnAudW + (5 * btnGap);
+            int totalRowW = btnBackW + btnSeekLW + btnPlayW + btnSeekRW + btnSubW + btnAudW + btnQualW + (6 * btnGap);
             int rowStartX = panelX + (panelW - totalRowW) / 2;
 
             int backX = rowStartX;
@@ -1611,6 +1688,7 @@ void App::renderPlayer() {
             int seekRX = pillX + btnPlayW + btnGap;
             int utilX = seekRX + btnSeekRW + btnGap;
             int audX = utilX + btnSubW + btnGap;
+            int qualX = audX + btnAudW + btnGap;
 
             // BACK button
             drawFilledRoundRect(backX, ctrlY, btnBackW, 30, 8, {255, 80, 80, 20});
@@ -1646,8 +1724,20 @@ void App::renderPlayer() {
             drawRoundRect(audX, ctrlY, btnAudW, 30, 8, {255, 255, 255, 30});
             drawTextCentered("AUD", audX + btnAudW / 2, ctrlY + 5, {180, 180, 200, 255}, m_fontSmall);
 
+            // QUAL button — switch between available stream quality options
+            bool hasQuality = false;
+            {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                hasQuality = m_detailStreams.size() > 1;
+            }
+            SDL_Color qualColor = hasQuality ? SDL_Color{120, 220, 120, 255} : SDL_Color{100, 100, 120, 255};
+            SDL_Color qualBorder = hasQuality ? SDL_Color{60, 180, 60, 50}   : SDL_Color{255, 255, 255, 20};
+            drawFilledRoundRect(qualX, ctrlY, btnQualW, 30, 8, qualBorder);
+            drawRoundRect(qualX, ctrlY, btnQualW, 30, 8, {255, 255, 255, 30});
+            drawTextCentered("QUAL", qualX + btnQualW / 2, ctrlY + 5, qualColor, m_fontSmall);
+
             // Controller hints (centered with extra padding)
-            drawTextCentered("[A] Play/Pause   [Left/Right] Seek   [Y] Subs   [X] Audio   [B] Back",
+            drawTextCentered("[A] Play/Pause   [Left/Right] Seek   [Y] Subs   [X] Audio   [L] Quality   [B] Back",
                              SCREEN_W / 2, panelY + panelH - 26, {120, 120, 140, 180}, m_fontSmall);
         }
 
@@ -1657,7 +1747,7 @@ void App::renderPlayer() {
             int scrubH = 60;
             int scrubX = SCREEN_W/2 - scrubW/2;
             int scrubY = 80;
-            drawFilledRoundRect(scrubX, scrubY, scrubW, scrubH, 10, {15, 15, 25, 220});
+            drawFilledRoundRect(scrubX, scrubY, scrubW, scrubH, 10, {0, 0, 0, 230});
             drawRoundRect(scrubX, scrubY, scrubW, scrubH, 10, ACCENT);
             std::string scrubStr = "Scrub: " + formatTime(m_scrubCurrentPos);
             drawText(scrubStr, scrubX + 30, scrubY + 18, TEXT_PRIMARY, m_fontNormal);
@@ -1670,7 +1760,7 @@ void App::renderPlayer() {
             int subX = SCREEN_W/2 - subW/2;
             int subY = SCREEN_H/2 - subH/2;
 
-            drawFilledRoundRect(subX, subY, subW, subH, 14, {18, 20, 32, 235});
+            drawFilledRoundRect(subX, subY, subW, subH, 14, {0, 0, 0, 240});
             drawRoundRect(subX, subY, subW, subH, 14, {255, 255, 255, 40});
 
             drawText("Select Subtitles", subX + 25, subY + 20, ACCENT, m_fontNormal);
@@ -1696,13 +1786,62 @@ void App::renderPlayer() {
             }
         }
 
+        if (m_showQualityList) {
+            int qualW = 640;
+            int qualH = 420;
+            int qualX = SCREEN_W/2 - qualW/2;
+            int qualY = SCREEN_H/2 - qualH/2;
+
+            drawFilledRoundRect(qualX, qualY, qualW, qualH, 14, {0, 0, 0, 240});
+            drawRoundRect(qualX, qualY, qualW, qualH, 14, {120, 220, 120, 60});
+
+            drawText("Select Quality / Stream", qualX + 25, qualY + 20, {120, 220, 120, 255}, m_fontNormal);
+
+            std::vector<Stream> localStreams;
+            {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                localStreams = m_detailStreams;
+            }
+
+            int maxVis = 7;
+            int startIdx = 0;
+            if (m_qualityListIndex >= maxVis) startIdx = m_qualityListIndex - maxVis + 1;
+
+            int rowY = qualY + 65;
+            for (int i = startIdx; i < (int)localStreams.size() && i < startIdx + maxVis; i++) {
+                bool sel = (i == m_qualityListIndex);
+                SDL_Color bg = sel ? CARD_HL : SDL_Color{255, 255, 255, 10};
+                drawFilledRoundRect(qualX + 20, rowY, qualW - 40, 42, 6, bg);
+                if (sel) drawRoundRect(qualX + 20, rowY, qualW - 40, 42, 6, {120, 220, 120, 200});
+
+                // Build a concise label: name + first line of title description
+                std::string label = localStreams[i].name;
+                if (!localStreams[i].title.empty()) {
+                    std::string desc = localStreams[i].title;
+                    // Take only the first line of the description
+                    auto nl = desc.find('\n');
+                    if (nl != std::string::npos) desc = desc.substr(0, nl);
+                    if (desc.size() > 60) desc = desc.substr(0, 57) + "...";
+                    label += ": " + desc;
+                }
+                if (label.size() > 72) label = label.substr(0, 69) + "...";
+
+                drawText(label, qualX + 35, rowY + 9, sel ? SDL_Color{120, 220, 120, 255} : TEXT_PRIMARY, m_fontSmall);
+                rowY += 48;
+            }
+
+            if (localStreams.empty()) {
+                drawTextCentered("No alternate streams available", SCREEN_W/2, qualY + qualH/2, TEXT_SECONDARY, m_fontNormal);
+            }
+        }
+
         if (m_showAudioList) {
             int audW = 480;
             int audH = 400;
             int audX = SCREEN_W/2 - audW/2;
             int audY = SCREEN_H/2 - audH/2;
 
-            drawFilledRoundRect(audX, audY, audW, audH, 14, {18, 20, 32, 235});
+            drawFilledRoundRect(audX, audY, audW, audH, 14, {0, 0, 0, 240});
             drawRoundRect(audX, audY, audW, audH, 14, {255, 255, 255, 40});
 
             drawText("Select Audio Track", audX + 25, audY + 20, ACCENT, m_fontNormal);
@@ -1735,7 +1874,7 @@ void App::renderPlayer() {
             int cardX = (SCREEN_W - cardW) / 2;
             int cardY = (SCREEN_H - cardH) / 2;
 
-            drawFilledRoundRect(cardX, cardY, cardW, cardH, 10, {20, 22, 36, 200});
+            drawFilledRoundRect(cardX, cardY, cardW, cardH, 10, {0, 0, 0, 220});
             drawRoundRect(cardX, cardY, cardW, cardH, 10, {255, 255, 255, 40});
             drawSpinner(SCREEN_W / 2, cardY + 30, 14);
 
@@ -2005,7 +2144,7 @@ void App::renderAddons() {
     int leftH = 520;
     
     // Draw background glassmorphic panels
-    drawFilledRect(leftX, leftY, leftW, leftH, {15, 15, 25, 120}); // base panel
+    drawFilledRect(leftX, leftY, leftW, leftH, {0, 0, 0, 160}); // base panel
     drawRect(leftX, leftY, leftW, leftH, {255, 255, 255, 25}); // border
     
     // Header
@@ -2020,7 +2159,7 @@ void App::renderAddons() {
     int rightW = 580;
     int rightH = 520;
     
-    drawFilledRect(rightX, rightY, rightW, rightH, {15, 15, 25, 120});
+    drawFilledRect(rightX, rightY, rightW, rightH, {0, 0, 0, 160});
     drawRect(rightX, rightY, rightW, rightH, {255, 255, 255, 25});
 
     drawFilledRect(rightX, rightY, rightW, 35, {100, 120, 255, 30});
@@ -2132,7 +2271,7 @@ void App::renderSettings() {
     int panelH = 560;
 
     // Base glassmorphic panel
-    drawFilledRect(panelX, panelY, panelW, panelH, {15, 15, 25, 120});
+    drawFilledRect(panelX, panelY, panelW, panelH, {0, 0, 0, 160});
     drawRect(panelX, panelY, panelW, panelH, {255, 255, 255, 25});
 
     // 6 settings options

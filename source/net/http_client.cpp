@@ -35,11 +35,13 @@ HttpResponse HttpClient::get(const std::string& url) {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, m_timeout);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "SwitchStream/1.0");
-    // SSL: use system CA bundle on Switch (disabled on Switch since it doesn't exist by default)
+    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
+    // Use a browser User-Agent — required by Cloudflare-protected addon servers
+    curl_easy_setopt(curl, CURLOPT_USERAGENT,
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 #ifdef __SWITCH__
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
@@ -55,6 +57,7 @@ HttpResponse HttpClient::get(const std::string& url) {
         curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
         response.statusCode = static_cast<int>(httpCode);
     } else {
+        fprintf(stderr, "[HttpClient] curl_easy_perform failed: %s\n", curl_easy_strerror(res));
         response.statusCode = -1;
     }
 
@@ -67,8 +70,6 @@ HttpResponse HttpClient::downloadBytes(const std::string& url) {
     return get(url);
 }
 
-void HttpClient::setTimeout(int seconds) {
-    m_timeout = seconds;
-}
+
 
 } // namespace ss

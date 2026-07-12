@@ -268,7 +268,9 @@ bool AddonClient::fetchStreams(const AddonManifest& addon,
     std::string url = baseUrl(addon.transportUrl)
         + "/stream/" + type + "/" + videoId + ".json";
 
+    m_http.setTimeout(30);
     auto resp = m_http.get(url);
+    m_http.setTimeout(10);
     if (!resp.ok()) return false;
 
     Document doc;
@@ -295,19 +297,33 @@ bool AddonClient::fetchStreams(const AddonManifest& addon,
                                      bh["notWebReady"].GetBool();
                 stream.bingeGroup = getString(bh, "bingeGroup");
 
+                std::string headersStr;
                 if (bh.HasMember("requestHeaders") && bh["requestHeaders"].IsObject()) {
                     auto& rh = bh["requestHeaders"];
-                    std::string headersStr;
                     for (auto it = rh.MemberBegin(); it != rh.MemberEnd(); ++it) {
                         if (it->name.IsString() && it->value.IsString()) {
                             if (!headersStr.empty()) {
-                                headersStr += ",";
+                                headersStr += "\n";
                             }
                             headersStr += std::string(it->name.GetString()) + ": " + std::string(it->value.GetString());
                         }
                     }
-                    stream.httpHeaderFields = headersStr;
                 }
+                if (bh.HasMember("proxyHeaders") && bh["proxyHeaders"].IsObject()) {
+                    auto& ph = bh["proxyHeaders"];
+                    if (ph.HasMember("request") && ph["request"].IsObject()) {
+                        auto& rh = ph["request"];
+                        for (auto it = rh.MemberBegin(); it != rh.MemberEnd(); ++it) {
+                            if (it->name.IsString() && it->value.IsString()) {
+                                if (!headersStr.empty()) {
+                                    headersStr += "\n";
+                                }
+                                headersStr += std::string(it->name.GetString()) + ": " + std::string(it->value.GetString());
+                            }
+                        }
+                    }
+                }
+                stream.httpHeaderFields = headersStr;
             }
 
             // Add streams that have direct URLs, YouTube IDs, or torrent infohashes

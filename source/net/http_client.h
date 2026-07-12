@@ -30,10 +30,12 @@ public:
     HttpResponse downloadBytes(const std::string& url);
 
     // Set timeout in seconds (default: 10s)
-    void setTimeout(int seconds);
+    void setTimeout(int seconds) {
+        m_timeout = seconds;
+    }
 
 private:
-    int m_timeout = 10;
+    int m_timeout = 60; // seconds — generous for Render.com cold-starts
 };
 
 } // namespace ss

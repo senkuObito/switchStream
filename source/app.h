@@ -156,6 +156,10 @@ private:
     int m_subListIndex = 0;
     int m_audioListIndex = 0;
 
+    // Quality (stream) switcher overlay state
+    bool m_showQualityList = false;
+    int m_qualityListIndex = 0;
+
 #ifdef __SWITCH__
     static constexpr const char* DATA_DIR    = "sdmc:/switch/switchstream/";
     static constexpr const char* CONFIG_FILE = "sdmc:/switch/switchstream/addons.json";

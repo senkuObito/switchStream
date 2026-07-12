@@ -69,9 +69,17 @@ bool AddonManager::loadConfig(const std::string& configPath) {
             InstalledAddon addon;
             addon.transportUrl = url;
             addon.enabled = enabled;
+            if (a.HasMember("name") && a["name"].IsString()) {
+                addon.manifest.name = a["name"].GetString();
+            }
+            if (a.HasMember("id") && a["id"].IsString()) {
+                addon.manifest.id = a["id"].GetString();
+            }
 
-            // Try to fetch manifest (we can do this lazily too)
-            if (m_client.fetchManifest(url, addon.manifest)) {
+            // Try to fetch manifest (will fall back to lazy/on-the-fly fetching if network is not ready)
+            m_client.fetchManifest(url, addon.manifest);
+
+            {
                 std::lock_guard<std::mutex> lock(m_addonsMutex);
                 m_addons.push_back(std::move(addon));
             }
@@ -170,6 +178,20 @@ void AddonManager::toggleAddon(const std::string& addonId) {
     }
 }
 
+void AddonManager::ensureManifest(InstalledAddon& addon) {
+    if (addon.manifest.resources.empty() && addon.manifest.catalogs.empty()) {
+        if (m_client.fetchManifest(addon.transportUrl, addon.manifest)) {
+            std::lock_guard<std::mutex> lock(m_addonsMutex);
+            for (auto& a : m_addons) {
+                if (a.transportUrl == addon.transportUrl) {
+                    a.manifest = addon.manifest;
+                    break;
+                }
+            }
+        }
+    }
+}
+
 bool AddonManager::addonHandles(const InstalledAddon& addon,
                                  const std::string& resource,
                                  const std::string& type,
@@ -184,6 +206,7 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
             bool typeMatch = false;
             for (auto& t : res.types) {
                 if (t == type) { typeMatch = true; break; }
+                if (type == "anime" && (t == "series" || t == "movie")) { typeMatch = true; break; }
             }
             if (!typeMatch) continue;
         }
@@ -193,6 +216,10 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
             bool prefixMatch = false;
             for (auto& prefix : res.idPrefixes) {
                 if (id.substr(0, prefix.size()) == prefix) {
+                    prefixMatch = true;
+                    break;
+                }
+                if (prefix == "tt" && id.substr(0, 6) == "kitsu:") {
                     prefixMatch = true;
                     break;
                 }
@@ -218,6 +245,7 @@ std::vector<CatalogRow> AddonManager::getHomeCatalogs(const std::string& type) {
 
     for (auto& addon : localAddons) {
         if (!addon.enabled) continue;
+        ensureManifest(addon);
 
         for (auto& cat : addon.manifest.catalogs) {
             if (!type.empty() && cat.type != type) continue;
@@ -257,6 +285,7 @@ std::vector<MetaItem> AddonManager::search(const std::string& query,
 
     for (auto& addon : localAddons) {
         if (!addon.enabled) continue;
+        ensureManifest(addon);
 
         for (auto& cat : addon.manifest.catalogs) {
             if (!type.empty() && cat.type != type) continue;
@@ -295,6 +324,7 @@ bool AddonManager::getMeta(const std::string& type, const std::string& id,
     }
 
     for (auto& addon : localAddons) {
+        ensureManifest(addon);
         if (!addonHandles(addon, "meta", type, id)) continue;
 
         if (m_client.fetchMeta(addon.manifest, type, id, out))
@@ -313,6 +343,7 @@ std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
     }
 
     for (auto& addon : localAddons) {
+        ensureManifest(addon);
         if (!addonHandles(addon, "stream", type, videoId)) continue;
 
         StreamResponse resp;
@@ -336,6 +367,7 @@ std::vector<Subtitle> AddonManager::getAllSubtitles(const std::string& type,
     }
 
     for (auto& addon : localAddons) {
+        ensureManifest(addon);
         if (!addonHandles(addon, "subtitles", type, id)) continue;
 
         SubtitleResponse resp;
