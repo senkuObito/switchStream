@@ -553,7 +553,7 @@ void App::handleInputForPad(u64 kDown) {
             std::lock_guard<std::mutex> lock(m_streamsMutex);
             if (m_loadingStreams) break;
 
-            if (m_detailMeta.type == "series" && !m_detailEpisodeSelected && !m_detailEpisodes.empty()) {
+            if (!m_detailEpisodeSelected && !m_detailEpisodes.empty()) {
                 if (kDown & HidNpadButton_Down) m_detailEpisodeIndex++;
                 if (kDown & HidNpadButton_Up) m_detailEpisodeIndex--;
                 if (m_detailEpisodeIndex < 0) m_detailEpisodeIndex = 0;
@@ -1120,7 +1120,7 @@ void App::handleTouch(int x, int y) {
         if (isLoading || m_loadingDetail) return;
 
         // Episode List Items
-        if (m_detailMeta.type == "series" && !epsSelected && !localEpisodes.empty()) {
+        if (!epsSelected && !localEpisodes.empty()) {
             int maxVisible = 8;
             int startIndex = 0;
             if (currentEpIndex >= maxVisible) {
@@ -2216,7 +2216,7 @@ void App::renderDetail() {
         localEpisodes = m_detailEpisodes;
     }
 
-    if (m_detailMeta.type == "series" && !epsSelected && !localEpisodes.empty()) {
+    if (!epsSelected && !localEpisodes.empty()) {
         drawText("Select Episode:", infoX, streamsHeaderY, ACCENT, m_fontNormal);
         int streamsStartY = streamsHeaderY + 32;
 
@@ -2909,7 +2909,7 @@ void App::loadDetail(const std::string& type, const std::string& id) {
             loadedMeta = resp.meta;
         }
 
-        if (type == "series" && !loadedMeta.videos.empty()) {
+        if (!loadedMeta.videos.empty()) {
             std::vector<Video> sortedEps = loadedMeta.videos;
             std::sort(sortedEps.begin(), sortedEps.end(), [](const Video& a, const Video& b) {
                 if (a.season != b.season) return a.season < b.season;
@@ -2918,9 +2918,9 @@ void App::loadDetail(const std::string& type, const std::string& id) {
             {
                 std::lock_guard<std::mutex> lock(m_streamsMutex);
                 m_detailEpisodes = std::move(sortedEps);
+                m_detailMeta = std::move(loadedMeta);
                 m_loadingStreams = false;
             }
-            m_detailMeta = loadedMeta;
             m_loadingDetail = false;
             return;
         }
