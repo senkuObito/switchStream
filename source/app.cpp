@@ -149,11 +149,13 @@ bool App::init() {
     m_addonManager.loadConfig(CONFIG_FILE);
     m_library.load(LIB_FILE);
 
-    // If no addons installed, populate config with a selection of popular official & community addons
     if (m_addonManager.getAddons().empty()) {
         printf("Pre-populating default Stremio addons... please wait (this happens only on first run)\n");
         const std::vector<std::string> defaultAddons = {
             "https://v3-cinemeta.strem.io/manifest.json",
+            "https://torrentio.strem.fun/manifest.json",
+            "https://cyberflix.elfhosted.com/manifest.json",
+            "https://pengu.uk/manifest.json",
             "https://free.flixnest.app/manifest.json",
             "https://opensubtitles-v3.strem.io/manifest.json",
             "https://watchhub.strem.io/manifest.json",
@@ -853,6 +855,9 @@ void App::handleInputForPad(u64 kDown) {
                 if (m_addonManager.getAddons().empty()) {
                     const std::vector<std::string> defaultAddons = {
                         "https://v3-cinemeta.strem.io/manifest.json",
+                        "https://torrentio.strem.fun/manifest.json",
+                        "https://cyberflix.elfhosted.com/manifest.json",
+                        "https://pengu.uk/manifest.json",
                         "https://free.flixnest.app/manifest.json",
                         "https://opensubtitles-v3.strem.io/manifest.json",
                         "https://watchhub.strem.io/manifest.json",
@@ -1196,6 +1201,9 @@ void App::handleTouch(int x, int y) {
                     if (m_addonManager.getAddons().empty()) {
                         const std::vector<std::string> defaultAddons = {
                             "https://v3-cinemeta.strem.io/manifest.json",
+                            "https://torrentio.strem.fun/manifest.json",
+                            "https://cyberflix.elfhosted.com/manifest.json",
+                            "https://pengu.uk/manifest.json",
                             "https://free.flixnest.app/manifest.json",
                             "https://opensubtitles-v3.strem.io/manifest.json",
                             "https://watchhub.strem.io/manifest.json",
@@ -1458,7 +1466,11 @@ void App::handleTouch(int x, int y) {
                 m_showQualityList = true;
                 m_qualityListIndex = m_detailStreamIndex;
                 printf("[Touch] Quality menu opened\n");
+            } else {
+                m_osdShowTime = 0; // Tapped in button row but not on a button
             }
+        } else {
+            m_osdShowTime = 0; // Tapped completely outside scrubber and buttons
         }
         break;
     }

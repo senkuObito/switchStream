@@ -1,0 +1,48 @@
+name: Build SwitchStream Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo dkp-pacman -Syyu --noconfirm
+          sudo dkp-pacman -S --noconfirm \
+            switch-pkg-config \
+            switch-sdl2 \
+            switch-sdl2_ttf \
+            switch-sdl2_image \
+            switch-freetype \
+            switch-mpv \
+            switch-ffmpeg \
+            switch-curl \
+            switch-rapidjson
+
+      - name: Build NRO
+        run: |
+          make clean
+          make -j$(nproc)
+
+      - name: Rename Output
+        run: |
+          mv switchstream.nro SwitchStream.nro
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: SwitchStream.nro
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
