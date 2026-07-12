@@ -2712,25 +2712,34 @@ void App::loadDetail(const std::string& type, const std::string& id) {
         std::vector<Stream> loadedStreams;
         for (const auto& s : rawStreams) {
             bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
+
             if (isTorrentStream) {
-                if (!m_addonManager.getEnableTorrents()) {
-                    continue; // Skip torrents entirely if disabled
-                }
-                
+                if (!m_addonManager.getEnableTorrents()) continue;
                 if (!s.url.empty()) {
                     loadedStreams.push_back(s);
-                } else {
+                } else if (!s.infoHash.empty()) {
                     Stream conv = s;
                     conv.url = "magnet:?xt=urn:btih:" + s.infoHash;
                     loadedStreams.push_back(conv);
                 }
             } else {
+                // Must have a playable URL — skip externalUrl-only entries
+                // (e.g. PenguPlay donor notices that have no stream URL)
                 if (!s.url.empty()) {
+                    // Only accept http/https URLs
+                    bool isHttp = s.url.rfind("http", 0) == 0;
+                    if (!isHttp) {
+                        printf("[loadDetail] Skipping non-http URL: %s\n", s.url.substr(0,60).c_str());
+                        continue;
+                    }
                     loadedStreams.push_back(s);
                 } else if (!s.ytId.empty()) {
                     Stream conv = s;
                     conv.url = "https://www.youtube.com/watch?v=" + s.ytId;
                     loadedStreams.push_back(conv);
+                } else {
+                    printf("[loadDetail] Skipping stream with no usable URL (name=%s)\n",
+                           s.name.substr(0, 40).c_str());
                 }
             }
         }
@@ -2859,7 +2868,17 @@ void App::startTorrentPolling() {
 }
 
 void App::playStream(const Stream& stream) {
-    if (stream.url.empty()) return;
+    if (stream.url.empty()) {
+        printf("[playStream] ERROR: stream URL is empty, name=%s\n", stream.name.c_str());
+        return;
+    }
+    // Guard against non-playable URLs that somehow slipped through
+    bool isPlayable = stream.url.rfind("http", 0) == 0 ||
+                      stream.url.rfind("magnet:", 0) == 0;
+    if (!isPlayable) {
+        printf("[playStream] ERROR: unplayable URL scheme: %s\n", stream.url.substr(0,60).c_str());
+        return;
+    }
 
     {
         std::lock_guard<std::mutex> lock(m_torrentMutex);

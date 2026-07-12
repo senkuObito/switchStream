@@ -10,6 +10,7 @@
 #include <rapidjson/stringbuffer.h>
 #include <fstream>
 #include <algorithm>
+#include <future>
 
 namespace ss {
 
@@ -342,15 +343,28 @@ std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
         localAddons = m_addons;
     }
 
+    std::vector<std::future<std::vector<Stream>>> futures;
+
     for (auto& addon : localAddons) {
         ensureManifest(addon);
         if (!addonHandles(addon, "stream", type, videoId)) continue;
 
-        StreamResponse resp;
-        if (m_client.fetchStreams(addon.manifest, type, videoId, resp)) {
-            for (auto& s : resp.streams) {
-                allStreams.push_back(std::move(s));
+        futures.push_back(std::async(std::launch::async, [this, addon, type, videoId]() {
+            std::vector<Stream> streams;
+            StreamResponse resp;
+            if (m_client.fetchStreams(addon.manifest, type, videoId, resp)) {
+                for (auto& s : resp.streams) {
+                    streams.push_back(std::move(s));
+                }
             }
+            return streams;
+        }));
+    }
+
+    for (auto& f : futures) {
+        auto streams = f.get();
+        for (auto& s : streams) {
+            allStreams.push_back(std::move(s));
         }
     }
 
@@ -366,15 +380,28 @@ std::vector<Subtitle> AddonManager::getAllSubtitles(const std::string& type,
         localAddons = m_addons;
     }
 
+    std::vector<std::future<std::vector<Subtitle>>> futures;
+
     for (auto& addon : localAddons) {
         ensureManifest(addon);
         if (!addonHandles(addon, "subtitles", type, id)) continue;
 
-        SubtitleResponse resp;
-        if (m_client.fetchSubtitles(addon.manifest, type, id, resp)) {
-            for (auto& s : resp.subtitles) {
-                allSubs.push_back(std::move(s));
+        futures.push_back(std::async(std::launch::async, [this, addon, type, id]() {
+            std::vector<Subtitle> subs;
+            SubtitleResponse resp;
+            if (m_client.fetchSubtitles(addon.manifest, type, id, resp)) {
+                for (auto& s : resp.subtitles) {
+                    subs.push_back(std::move(s));
+                }
             }
+            return subs;
+        }));
+    }
+
+    for (auto& f : futures) {
+        auto subs = f.get();
+        for (auto& s : subs) {
+            allSubs.push_back(std::move(s));
         }
     }
 

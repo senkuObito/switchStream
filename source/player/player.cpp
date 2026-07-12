@@ -26,10 +26,13 @@ Player::~Player() {
 }
 
 static int stream_open_cb(void* user_data, char* uri, mpv_stream_cb_info* info) {
-    printf("[Player] Custom stream_open_cb called for URI: %s\n", uri);
     Player* player = static_cast<Player*>(user_data);
-    CurlStream* stream = new CurlStream(uri, player->getActiveHeaders());
-    
+    // Use the active stream headers (Referer, UA etc.) for the main URL.
+    // Sub-requests (HLS segments, DASH chunks) carry no extra headers —
+    // they use the fallback browser UA set via CURLOPT_USERAGENT.
+    std::string headers = player->getActiveHeaders();
+    CurlStream* stream = new CurlStream(uri, headers);
+
     info->cookie = stream;
     info->read_fn = [](void* cookie, char* buf, uint64_t nbytes) -> int64_t {
         return static_cast<CurlStream*>(cookie)->read(buf, nbytes);
@@ -43,8 +46,7 @@ static int stream_open_cb(void* user_data, char* uri, mpv_stream_cb_info* info) 
     info->close_fn = [](void* cookie) {
         delete static_cast<CurlStream*>(cookie);
     };
-    
-    return 0; // Success
+    return 0;
 }
 
 bool Player::init(SDL_Window* window, SDL_Renderer* renderer, bool hwDecode) {
@@ -56,7 +58,7 @@ bool Player::init(SDL_Window* window, SDL_Renderer* renderer, bool hwDecode) {
 
     // Basic options
     mpv_set_option_string(m_mpv, "keep-open", "yes");
-    mpv_set_option_string(m_mpv, "ytdl", "yes"); // support YouTube URLs
+    mpv_set_option_string(m_mpv, "ytdl", "no"); // support YouTube URLs
     mpv_set_option_string(m_mpv, "tls-verify", "no");
 #ifdef __SWITCH__
     mpv_set_option_string(m_mpv, "demuxer-lavf-o", "tls_verify=0,verify=0");
@@ -77,8 +79,20 @@ bool Player::init(SDL_Window* window, SDL_Renderer* renderer, bool hwDecode) {
 #endif
     mpv_set_option(m_mpv, "osc", MPV_FORMAT_FLAG, &val); // handle on-screen controls cross-platform
 
-    mpv_stream_cb_add_ro(m_mpv, "http", this, stream_open_cb);
-    mpv_stream_cb_add_ro(m_mpv, "https", this, stream_open_cb);
+#ifdef __SWITCH__
+    // On Switch, mpv's libavformat is compiled without native https support.
+    // Register CurlStream for https so all https:// URLs (including HLS/DASH
+    // sub-requests for segments) can be fetched via libcurl.
+    int cb_err = mpv_stream_cb_add_ro(m_mpv, "https", this, stream_open_cb);
+    if (cb_err < 0) {
+        printf("[Player] Failed to register https callback: %s\n", mpv_error_string(cb_err));
+    }
+#endif
+
+    // Set a browser User-Agent for all mpv HTTP requests (helps CDN access)
+    mpv_set_option_string(m_mpv, "user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
     if (mpv_initialize(m_mpv) < 0) {
         shutdown();
@@ -276,11 +290,36 @@ void Player::play(const std::string& url, const std::string& headers) {
 
     m_activeHeaders = headers;
 
+    // mpv's http-header-fields expects comma-separated "Key: Value" pairs.
+    // Our addon_client produces newline-separated headers — convert here.
     if (!headers.empty()) {
-        mpv_set_option_string(m_mpv, "http-header-fields", headers.c_str());
+        std::string mpvHeaders;
+        size_t pos = 0;
+        while (pos < headers.size()) {
+            size_t next = headers.find('\n', pos);
+            std::string h = headers.substr(pos, next - pos);
+            // strip trailing \r
+            if (!h.empty() && h.back() == '\r') h.pop_back();
+            if (!h.empty()) {
+                if (!mpvHeaders.empty()) mpvHeaders += ",";
+                mpvHeaders += h;
+            }
+            if (next == std::string::npos) break;
+            pos = next + 1;
+        }
+        if (!mpvHeaders.empty()) {
+            mpv_set_option_string(m_mpv, "http-header-fields", mpvHeaders.c_str());
+            printf("[Player] http-header-fields: %s\n", mpvHeaders.c_str());
+        }
     } else {
         mpv_set_option_string(m_mpv, "http-header-fields", "");
     }
+
+    // Restore audio in case a previous stop() muted it
+    int unmuteVal = 0;
+    mpv_set_property(m_mpv, "mute", MPV_FORMAT_FLAG, &unmuteVal);
+    double fullVol = 100.0;
+    mpv_set_property(m_mpv, "ao-volume", MPV_FORMAT_DOUBLE, &fullVol);
 
     // Explicitly unpause on the mpv handle when starting a new stream
     int pauseVal = 0;
@@ -314,8 +353,14 @@ void Player::togglePlay() {
 
 void Player::stop() {
     if (!m_mpv) return;
-    int val = 1;
-    mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &val);
+    // Immediately mute to prevent audio bleed while mpv drains its buffer
+    int muteVal = 1;
+    mpv_set_property(m_mpv, "mute", MPV_FORMAT_FLAG, &muteVal);
+    double zeroVol = 0.0;
+    mpv_set_property(m_mpv, "ao-volume", MPV_FORMAT_DOUBLE, &zeroVol);
+    // Pause then stop (stop is async — mute ensures silence during drain)
+    int pauseVal = 1;
+    mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &pauseVal);
     const char* cmd[] = {"stop", nullptr};
     mpv_command(m_mpv, cmd);
     m_paused = true;
