@@ -1,0 +1,10 @@
+{
+    "addons": [
+        {
+            "url": "https://v3-cinemeta.strem.io/manifest.json",
+            "enabled": true,
+            "name": "Cinemeta",
+            "id": "com.linvo.cinemeta"
+        }
+    ]
+}

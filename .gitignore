@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+devkitpro_temp/
+switchstream_data/
+*.elf
+*.nro
+*.nacp
+romfs/assets/*
+!romfs/assets/.gitkeep
+
+# Large binaries / Precompiled files
+torrserver
+
+# Logs
+*.txt
+*.log
+
+# IDE & OS files
+.DS_Store
+.vscode/
+.idea/

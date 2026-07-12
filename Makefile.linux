@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────
+# SwitchStream — Linux Simulator Makefile
+# ─────────────────────────────────────────────
+
+CXX = g++
+CXXFLAGS = -std=c++17 -O2 -Wall -fno-rtti -fno-exceptions -Iinclude
+LIBS = -lSDL2 -lSDL2_ttf -lSDL2_image -lcurl -lmpv
+
+# Source files
+SOURCES = source/main.cpp \
+          source/app.cpp \
+          source/core/addon_client.cpp \
+          source/core/addon_manager.cpp \
+          source/core/library.cpp \
+          source/net/http_client.cpp \
+          source/net/image_cache.cpp \
+          source/player/player.cpp \
+          source/player/curl_stream.cpp
+
+OBJECTS = $(SOURCES:.cpp=.o)
+TARGET = switchstream_sim
+
+.PHONY: all clean run install-deps
+
+all: $(TARGET)
+
+$(TARGET): $(OBJECTS)
+	$(CXX) $(OBJECTS) -o $(TARGET) $(LIBS)
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(OBJECTS) $(TARGET)
+	rm -rf switchstream_data
+
+run: all
+	./$(TARGET)
+
+install-deps:
+	sudo apt-get update && sudo apt-get install -y \
+		libsdl2-dev \
+		libsdl2-ttf-dev \
+		libsdl2-image-dev \
+		libcurl4-openssl-dev \
+		rapidjson-dev \
+		libmpv-dev
