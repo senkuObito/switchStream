@@ -103,6 +103,9 @@ bool App::init() {
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!m_renderer) return false;
 
+    // Hide the default SDL mouse cursor so touch doesn't feel like a mouse pointer
+    SDL_ShowCursor(SDL_DISABLE);
+
 #ifdef __SWITCH__
     // Load system font (Switch has a shared font we can use)
     PlFontData fontData;
