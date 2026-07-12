@@ -52,11 +52,6 @@ jobs:
       - name: Compile NRO
         run: |
           export DEVKITPRO=/opt/devkitpro
-          echo "=== Diagnostic Info ==="
-          which pkg-config || echo "pkg-config not found"
-          which pkgconf || echo "pkgconf not found"
-          $DEVKITPRO/portlibs/switch/bin/aarch64-none-elf-pkg-config --version || echo "aarch64-none-elf-pkg-config failed"
-          echo "========================"
           make > build.log 2>&1 || (cat build.log && exit 1)
 
       - name: Upload Build Log
