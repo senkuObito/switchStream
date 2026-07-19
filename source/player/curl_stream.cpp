@@ -148,6 +148,9 @@ void CurlStream::curlThreadFunc(int64_t offset) {
 
     CURLcode res = curl_easy_perform(curl);
 
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
     curl_off_t totalLen = -1;
     curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &totalLen);
 
@@ -155,6 +158,15 @@ void CurlStream::curlThreadFunc(int64_t offset) {
         std::unique_lock<std::mutex> lock(m_mutex);
         if (res != CURLE_OK && res != CURLE_WRITE_ERROR) {
             printf("[CurlStream] curl_easy_perform failed: %s\n", curl_easy_strerror(res));
+            m_error = true;
+        } else if (httpCode >= 400) {
+            // Server returned an error page (4xx/5xx) — treat as stream failure.
+            // Without this check mpv tries to parse the HTML as video data and
+            // reports a misleading "unrecognized file format" error.
+            printf("[CurlStream] HTTP error %ld for URL: %.80s...\n", httpCode, m_url.c_str());
+            m_bufferCount = 0; // discard any HTML body already buffered
+            m_bufferHead  = 0;
+            m_bufferTail  = 0;
             m_error = true;
         } else {
             m_eof = true;

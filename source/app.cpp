@@ -86,6 +86,9 @@ bool App::init() {
 
     m_downloadWorkerRunning = true;
     m_downloadWorkerThread = std::thread(&App::downloadWorkerLoop, this);
+    
+    m_workerRunning = true;
+    m_detailWorkerThread = std::thread(&App::detailWorkerLoop, this);
 
     // Use windowed mode on Linux for easier debugging, fullscreen on Switch
 #ifdef __SWITCH__
@@ -566,65 +569,74 @@ void App::handleInputForPad(u64 kDown) {
 
             std::lock_guard<std::mutex> lock(m_streamsMutex);
 
+            // Filter episodes for the current season
+            std::vector<Video> currentSeasonEps;
+            if (!m_detailEpisodes.empty() && !m_detailSeasons.empty()) {
+                int targetSeason = m_detailSeasons[m_detailSeasonFilter];
+                for (const auto& ep : m_detailEpisodes) {
+                    if (ep.season == targetSeason) {
+                        currentSeasonEps.push_back(ep);
+                    }
+                }
+            }
+
             if (!m_detailEpisodeSelected && !m_detailEpisodes.empty()) {
+                if (kDown & HidNpadButton_R || kDown & HidNpadButton_Right) {
+                    m_detailSeasonFilter++;
+                    if (m_detailSeasonFilter >= (int)m_detailSeasons.size()) m_detailSeasonFilter = 0;
+                    m_detailEpisodeIndex = 0;
+                }
+                if (kDown & HidNpadButton_L || kDown & HidNpadButton_Left) {
+                    m_detailSeasonFilter--;
+                    if (m_detailSeasonFilter < 0) m_detailSeasonFilter = (int)m_detailSeasons.size() - 1;
+                    m_detailEpisodeIndex = 0;
+                }
+
                 if (kDown & HidNpadButton_Down) m_detailEpisodeIndex++;
                 if (kDown & HidNpadButton_Up) m_detailEpisodeIndex--;
                 if (m_detailEpisodeIndex < 0) m_detailEpisodeIndex = 0;
-                if (m_detailEpisodeIndex >= (int)m_detailEpisodes.size())
-                    m_detailEpisodeIndex = (int)m_detailEpisodes.size() - 1;
+                if (m_detailEpisodeIndex >= (int)currentSeasonEps.size())
+                    m_detailEpisodeIndex = currentSeasonEps.empty() ? 0 : (int)currentSeasonEps.size() - 1;
                 
-                if (kDown & HidNpadButton_A) {
-                    std::string epId = m_detailEpisodes[m_detailEpisodeIndex].id;
+                if (kDown & HidNpadButton_A && !currentSeasonEps.empty()) {
+                    std::string epId = currentSeasonEps[m_detailEpisodeIndex].id;
                     m_detailEpisodeSelected = true;
                     m_detailStreams.clear();
                     m_detailStreamIndex = 0;
                     m_loadingStreams = true;
                     
-                    if (m_detailLoadingThread.joinable()) {
-                        m_detailLoadingThread.detach();
-                    }
-                    
                     int currentGen = ++m_detailGeneration;
                     std::string epType = m_detailMeta.type;
 
-                    m_detailLoadingThread = std::thread([this, epType, epId, currentGen]() {
-                        auto rawStreams = m_addonManager.getAllStreams(epType, epId);
-                        std::vector<Stream> loadedStreams;
-                        for (const auto& s : rawStreams) {
-                            bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
-                            if (isTorrentStream) {
-                                if (!m_addonManager.getEnableTorrents()) continue;
-                                if (!s.url.empty()) {
-                                    loadedStreams.push_back(s);
-                                } else if (!s.infoHash.empty()) {
-                                    Stream modified = s;
-                                    modified.url = m_addonManager.getTorrServerHost() + "/stream?link=" + s.infoHash + "&index=" + std::to_string(s.fileIdx > -1 ? s.fileIdx : 1) + "&play";
-                                    loadedStreams.push_back(modified);
-                                }
-                            } else {
-                                if (!s.url.empty() || !s.externalUrl.empty()) {
-                                    loadedStreams.push_back(s);
-                                }
-                            }
-                        }
-                        
-                        {
-                            std::lock_guard<std::mutex> lock(m_streamsMutex);
-                            if (m_detailGeneration.load() != currentGen) return;
-                            m_detailStreams = std::move(loadedStreams);
-                            m_loadingStreams = false;
-                        }
-                    });
+                    {
+                        std::lock_guard<std::mutex> lock(m_workerMutex);
+                        m_workerTask = 2; // Episode streams
+                        m_workerType = epType;
+                        m_workerId = epId;
+                        m_workerGen = currentGen;
+                    }
+                    m_workerCv.notify_one();
                 }
+                
+                if (kDown & HidNpadButton_B) m_screen = Screen::HOME;
             } else {
                 if (kDown & HidNpadButton_Down) m_detailStreamIndex++;
                 if (kDown & HidNpadButton_Up) m_detailStreamIndex--;
                 if (m_detailStreamIndex < 0) m_detailStreamIndex = 0;
                 if (m_detailStreamIndex >= (int)m_detailStreams.size())
-                    m_detailStreamIndex = (int)m_detailStreams.size() - 1;
+                    m_detailStreamIndex = m_detailStreams.empty() ? 0 : (int)m_detailStreams.size() - 1;
                 
                 if (kDown & HidNpadButton_A && !m_detailStreams.empty()) {
                     playStream(m_detailStreams[m_detailStreamIndex]);
+                }
+
+                // If B is pressed while viewing streams (for movies or episodes)
+                if (kDown & HidNpadButton_B) {
+                    if (m_detailEpisodeSelected) {
+                        m_detailEpisodeSelected = false; // Close modal
+                    } else {
+                        m_screen = Screen::HOME; // Exit movie detail page
+                    }
                 }
             }
         }
@@ -633,7 +645,6 @@ void App::handleInputForPad(u64 kDown) {
                                       m_detailMeta.name, m_detailMeta.poster);
             m_library.save(LIB_FILE);
         }
-        if (kDown & HidNpadButton_B) m_screen = Screen::HOME;
         break;
 
     case Screen::LIBRARY:
@@ -1208,41 +1219,19 @@ void App::handleTouch(int x, int y) {
                         m_detailStreamIndex = 0;
                         m_loadingStreams = true;
                     }
-                    if (m_detailLoadingThread.joinable()) {
-                        m_detailLoadingThread.detach();
-                    }
+
                     
                     int currentGen = ++m_detailGeneration;
                     std::string epType = m_detailMeta.type;
 
-                    m_detailLoadingThread = std::thread([this, epType, epId, currentGen]() {
-                        auto rawStreams = m_addonManager.getAllStreams(epType, epId);
-                        std::vector<Stream> loadedStreams;
-                        for (const auto& s : rawStreams) {
-                            bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
-                            if (isTorrentStream) {
-                                if (!m_addonManager.getEnableTorrents()) continue;
-                                if (!s.url.empty()) {
-                                    loadedStreams.push_back(s);
-                                } else if (!s.infoHash.empty()) {
-                                    Stream modified = s;
-                                    modified.url = m_addonManager.getTorrServerHost() + "/stream?link=" + s.infoHash + "&index=" + std::to_string(s.fileIdx > -1 ? s.fileIdx : 1) + "&play";
-                                    loadedStreams.push_back(modified);
-                                }
-                            } else {
-                                if (!s.url.empty() || !s.externalUrl.empty()) {
-                                    loadedStreams.push_back(s);
-                                }
-                            }
-                        }
-                        
-                        {
-                            std::lock_guard<std::mutex> lock(m_streamsMutex);
-                            if (m_detailGeneration.load() != currentGen) return;
-                            m_detailStreams = std::move(loadedStreams);
-                            m_loadingStreams = false;
-                        }
-                    });
+                    {
+                        std::lock_guard<std::mutex> lock(m_workerMutex);
+                        m_workerTask = 2; // Episode streams
+                        m_workerType = epType;
+                        m_workerId = epId;
+                        m_workerGen = currentGen;
+                    }
+                    m_workerCv.notify_one();
                     return;
                 }
                 listY += 40;
@@ -2279,6 +2268,8 @@ void App::renderDetail() {
     bool epsSelected = false;
     int currentEpIndex = 0;
     std::vector<Video> localEpisodes;
+    std::vector<int> localSeasons;
+    int currentSeasonFilter = 0;
     {
         std::lock_guard<std::mutex> lock(m_streamsMutex);
         isLoading = m_loadingStreams;
@@ -2287,10 +2278,30 @@ void App::renderDetail() {
         epsSelected = m_detailEpisodeSelected;
         currentEpIndex = m_detailEpisodeIndex;
         localEpisodes = m_detailEpisodes;
+        localSeasons = m_detailSeasons;
+        currentSeasonFilter = m_detailSeasonFilter;
+    }
+
+    // Filter localEpisodes by current season
+    std::vector<Video> currentSeasonEps;
+    if (!localSeasons.empty()) {
+        int targetSeason = localSeasons[currentSeasonFilter];
+        for (const auto& ep : localEpisodes) {
+            if (ep.season == targetSeason) {
+                currentSeasonEps.push_back(ep);
+            }
+        }
+    } else {
+        currentSeasonEps = localEpisodes;
     }
 
     if (!localEpisodes.empty()) {
-        drawText("Select Episode:", infoX, streamsHeaderY, ACCENT, m_fontNormal);
+        std::string seasonTabs = "Select Episode:";
+        if (!localSeasons.empty()) {
+            int currentS = localSeasons[currentSeasonFilter];
+            seasonTabs = "Season: < " + std::to_string(currentS) + " >  (L/R to change)";
+        }
+        drawText(seasonTabs, infoX, streamsHeaderY, ACCENT, m_fontNormal);
         int streamsStartY = streamsHeaderY + 32;
 
         int remainingH = SCREEN_H - streamsStartY - 40;
@@ -2298,20 +2309,24 @@ void App::renderDetail() {
         if (maxVisible < 3) maxVisible = 3;
 
         int startIndex = 0;
-        if (currentEpIndex >= maxVisible) {
-            startIndex = currentEpIndex - maxVisible + 1;
+        if (currentEpIndex >= maxVisible / 2) {
+            startIndex = currentEpIndex - maxVisible / 2;
         }
+        if (startIndex + maxVisible > (int)currentSeasonEps.size()) {
+            startIndex = (int)currentSeasonEps.size() - maxVisible;
+        }
+        if (startIndex < 0) startIndex = 0;
 
         int y = streamsStartY;
         if (startIndex > 0) {
             drawText("^ More episodes above...", infoX, y - 18, TEXT_SECONDARY, m_fontSmall);
         }
 
-        for (int i = startIndex; i < (int)localEpisodes.size() && i < startIndex + maxVisible; i++) {
+        for (int i = startIndex; i < (int)currentSeasonEps.size() && i < startIndex + maxVisible; i++) {
             bool sel = (i == currentEpIndex);
             if (sel) drawFilledRect(infoX - 5, y - 2, SCREEN_W - infoX - 40, 36, CARD_HL);
 
-            auto& ep = localEpisodes[i];
+            auto& ep = currentSeasonEps[i];
             std::string label = "S" + std::to_string(ep.season) + " E" + std::to_string(ep.episode);
             if (!ep.title.empty()) label += " — " + ep.title;
             if (label.size() > 90) label = label.substr(0, 87) + "...";
@@ -2320,7 +2335,7 @@ void App::renderDetail() {
             y += 40;
         }
 
-        if (startIndex + maxVisible < (int)localEpisodes.size()) {
+        if (startIndex + maxVisible < (int)currentSeasonEps.size()) {
             drawText("v More episodes below...", infoX, y + 2, TEXT_SECONDARY, m_fontSmall);
         }
 
@@ -2341,7 +2356,7 @@ void App::renderDetail() {
         drawFilledRect(modalX, modalY, modalW, modalH, {30, 30, 45, 255});
         drawRect(modalX, modalY, modalW, modalH, ACCENT);
         
-        auto& ep = localEpisodes[currentEpIndex];
+        auto& ep = currentSeasonEps[currentEpIndex];
         std::string epLabel = "S" + std::to_string(ep.season) + " E" + std::to_string(ep.episode);
         
         if (isLoading) {
@@ -2965,7 +2980,11 @@ void App::downloadWorkerLoop() {
 void App::loadHomeCatalogs() {
     if (m_loadingHome) return;
     if (m_homeLoadingThread.joinable()) {
+        // Cancel in-flight HTTP so the join returns immediately (~1s max)
+        // instead of waiting for a multi-second catalog fetch to finish.
+        m_http.cancel();
         m_homeLoadingThread.join();
+        m_http.reset(); // allow future requests
     }
     m_loadingHome = true;
     m_homeLoadingThread = std::thread([this]() {
@@ -3027,6 +3046,124 @@ void App::sortSearchResults() {
     }
 }
 
+void App::detailWorkerLoop() {
+    while (m_workerRunning) {
+        int task = 0;
+        std::string type, id;
+        int currentGen = 0;
+
+        {
+            std::unique_lock<std::mutex> lock(m_workerMutex);
+            m_workerCv.wait(lock, [this] { return m_workerTask != 0 || !m_workerRunning; });
+            if (!m_workerRunning) break;
+            task = m_workerTask;
+            type = m_workerType;
+            id = m_workerId;
+            currentGen = m_workerGen;
+            m_workerTask = 0;
+        }
+
+        if (task == 1) { // Meta + Streams (Movies/Series)
+            MetaResponse resp;
+            MetaItem loadedMeta;
+            if (m_addonManager.getMeta(type, id, resp)) {
+                loadedMeta = resp.meta;
+            }
+
+            if (!loadedMeta.videos.empty()) {
+                std::vector<Video> sortedEps = loadedMeta.videos;
+                std::sort(sortedEps.begin(), sortedEps.end(), [](const Video& a, const Video& b) {
+                    if (a.season != b.season) return a.season < b.season;
+                    return a.episode < b.episode;
+                });
+
+                // Build sorted unique season list
+                std::vector<int> seasons;
+                for (auto& v : sortedEps) {
+                    if (seasons.empty() || seasons.back() != v.season)
+                        seasons.push_back(v.season);
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    if (m_detailGeneration.load() != currentGen) continue;
+                    m_detailEpisodes    = std::move(sortedEps);
+                    m_detailSeasons     = std::move(seasons);
+                    m_detailSeasonFilter = 0;
+                    m_detailEpisodeIndex = 0;
+                    m_detailMeta = std::move(loadedMeta);
+                    m_loadingStreams = false;
+                    m_loadingDetail = false;
+                }
+                continue;
+            }
+
+            auto rawStreams = m_addonManager.getAllStreams(type, id);
+            std::vector<Stream> loadedStreams;
+            for (const auto& s : rawStreams) {
+                bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
+                if (isTorrentStream) {
+                    if (!m_addonManager.getEnableTorrents()) continue;
+                    if (!s.url.empty()) {
+                        loadedStreams.push_back(s);
+                    } else if (!s.infoHash.empty()) {
+                        Stream conv = s;
+                        conv.url = "magnet:?xt=urn:btih:" + s.infoHash;
+                        loadedStreams.push_back(conv);
+                    }
+                } else {
+                    if (!s.url.empty()) {
+                        bool isHttp = s.url.rfind("http", 0) == 0;
+                        if (!isHttp) continue;
+                        loadedStreams.push_back(s);
+                    } else if (!s.ytId.empty()) {
+                        Stream conv = s;
+                        conv.url = "https://www.youtube.com/watch?v=" + s.ytId;
+                        loadedStreams.push_back(conv);
+                    }
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                if (m_detailGeneration.load() != currentGen) continue;
+                m_detailMeta = std::move(loadedMeta);
+                m_detailStreams = std::move(loadedStreams);
+                m_loadingStreams = false;
+                m_loadingDetail = false;
+            }
+
+        } else if (task == 2) { // Episode Streams
+            auto rawStreams = m_addonManager.getAllStreams(type, id);
+            std::vector<Stream> loadedStreams;
+            for (const auto& s : rawStreams) {
+                bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
+                if (isTorrentStream) {
+                    if (!m_addonManager.getEnableTorrents()) continue;
+                    if (!s.url.empty()) {
+                        loadedStreams.push_back(s);
+                    } else if (!s.infoHash.empty()) {
+                        Stream modified = s;
+                        modified.url = m_addonManager.getTorrServerHost() + "/stream?link=" + s.infoHash + "&index=" + std::to_string(s.fileIdx > -1 ? s.fileIdx : 1) + "&play";
+                        loadedStreams.push_back(modified);
+                    }
+                } else {
+                    if (!s.url.empty() || !s.externalUrl.empty()) {
+                        loadedStreams.push_back(s);
+                    }
+                }
+            }
+            
+            {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                if (m_detailGeneration.load() != currentGen) continue;
+                m_detailStreams = std::move(loadedStreams);
+                m_loadingStreams = false;
+            }
+        }
+    }
+}
+
 void App::loadDetail(const std::string& type, const std::string& id) {
     m_loadingDetail = true;
     m_loadingStreams = true;
@@ -3043,77 +3180,14 @@ void App::loadDetail(const std::string& type, const std::string& id) {
 
     m_detailMeta = MetaItem(); // clear old
 
-    if (m_detailLoadingThread.joinable()) {
-        m_detailLoadingThread.detach();
+    {
+        std::lock_guard<std::mutex> lock(m_workerMutex);
+        m_workerTask = 1; // Meta + Streams
+        m_workerType = type;
+        m_workerId = id;
+        m_workerGen = currentGen;
     }
-
-    m_detailLoadingThread = std::thread([this, type, id, currentGen]() {
-        MetaResponse resp;
-        MetaItem loadedMeta;
-        if (m_addonManager.getMeta(type, id, resp)) {
-            loadedMeta = resp.meta;
-        }
-
-        if (!loadedMeta.videos.empty()) {
-            std::vector<Video> sortedEps = loadedMeta.videos;
-            std::sort(sortedEps.begin(), sortedEps.end(), [](const Video& a, const Video& b) {
-                if (a.season != b.season) return a.season < b.season;
-                return a.episode < b.episode;
-            });
-            {
-                std::lock_guard<std::mutex> lock(m_streamsMutex);
-                if (m_detailGeneration.load() != currentGen) return;
-                m_detailEpisodes = std::move(sortedEps);
-                m_detailMeta = std::move(loadedMeta);
-                m_loadingStreams = false;
-                m_loadingDetail = false;
-            }
-            return;
-        }
-
-        auto rawStreams = m_addonManager.getAllStreams(type, id);
-
-        std::vector<Stream> loadedStreams;
-        for (const auto& s : rawStreams) {
-            bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
-
-            if (isTorrentStream) {
-                if (!m_addonManager.getEnableTorrents()) continue;
-                if (!s.url.empty()) {
-                    loadedStreams.push_back(s);
-                } else if (!s.infoHash.empty()) {
-                    Stream conv = s;
-                    conv.url = "magnet:?xt=urn:btih:" + s.infoHash;
-                    loadedStreams.push_back(conv);
-                }
-            } else {
-                if (!s.url.empty()) {
-                    bool isHttp = s.url.rfind("http", 0) == 0;
-                    if (!isHttp) {
-                        printf("[loadDetail] Skipping non-http URL: %s\n", s.url.substr(0,60).c_str());
-                        continue;
-                    }
-                    loadedStreams.push_back(s);
-                } else if (!s.ytId.empty()) {
-                    Stream conv = s;
-                    conv.url = "https://www.youtube.com/watch?v=" + s.ytId;
-                    loadedStreams.push_back(conv);
-                } else {
-                    printf("[loadDetail] Skipping stream with no usable URL (name=%s)\n",
-                           s.name.substr(0, 40).c_str());
-                }
-            }
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(m_streamsMutex);
-            if (m_detailGeneration.load() != currentGen) return;
-            m_detailMeta = std::move(loadedMeta);
-            m_detailStreams = std::move(loadedStreams);
-            m_loadingStreams = false;
-            m_loadingDetail = false;
-        }
-    });
+    m_workerCv.notify_one();
 }
 
 void App::startTorrentPolling() {
@@ -3134,6 +3208,8 @@ void App::startTorrentPolling() {
     m_torrentPollingThread = std::thread([this]() {
         printf("TorrServer stats polling thread started.\n");
         while (true) {
+            if (m_shuttingDown) break; // exit immediately if app is closing
+
             std::string magnet;
             bool active = false;
             {
@@ -3218,7 +3294,13 @@ void App::startTorrentPolling() {
                 m_torrentPreloadPercent = -1;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            // Interruptible sleep — wakes immediately on shutdown signal
+            {
+                std::unique_lock<std::mutex> lk(m_shutdownMtx);
+                m_shutdownCv.wait_for(lk, std::chrono::milliseconds(500),
+                                      [this] { return m_shuttingDown.load(); });
+            }
+            if (m_shuttingDown) break;
         }
 
         {
@@ -3324,7 +3406,14 @@ void App::shutdown() {
     // Guard to prevent double-shutdown
     if (!m_window) return;
 
-    // 1. Terminate and join all background threads first
+    // 0. Cancel all in-flight HTTP requests so blocked threads return quickly
+    m_http.cancel();
+
+    // Signal sleeping threads (torrent poller) to wake up immediately
+    m_shuttingDown = true;
+    m_shutdownCv.notify_all();
+
+    // 1. Terminate and join all background threads
     m_downloadWorkerRunning = false;
     m_downloadQueueCV.notify_all();
     if (m_downloadWorkerThread.joinable()) {
@@ -3339,16 +3428,18 @@ void App::shutdown() {
         m_torrentPollingThread.join();
     }
     if (m_homeLoadingThread.joinable()) {
-        m_homeLoadingThread.join();
+        m_homeLoadingThread.join(); // returns fast: curl aborted
     }
     if (m_searchThread.joinable()) {
-        m_searchThread.join();
+        m_searchThread.join(); // returns fast: curl aborted
     }
-    if (m_detailLoadingThread.joinable()) {
-        m_detailLoadingThread.join();
+    m_workerRunning = false;
+    m_workerCv.notify_all();
+    if (m_detailWorkerThread.joinable()) {
+        m_detailWorkerThread.join(); // returns fast: curl aborted
     }
     if (m_installThread.joinable()) {
-        m_installThread.join();
+        m_installThread.join(); // returns fast: curl aborted
     }
 
     // 2. Save configurations
@@ -3361,17 +3452,18 @@ void App::shutdown() {
         m_gameController = nullptr;
     }
 
-    // 4. Delete cache and close SDL resources
+    // 4. Stop mpv playback before destroying it so it drains buffers fast
+    m_player.stop();
     m_player.shutdown();
     delete m_imageCache;
     m_imageCache = nullptr;
 
-    if (m_fontLarge) { TTF_CloseFont(m_fontLarge); m_fontLarge = nullptr; }
+    if (m_fontLarge)  { TTF_CloseFont(m_fontLarge);  m_fontLarge  = nullptr; }
     if (m_fontNormal) { TTF_CloseFont(m_fontNormal); m_fontNormal = nullptr; }
-    if (m_fontSmall) { TTF_CloseFont(m_fontSmall); m_fontSmall = nullptr; }
+    if (m_fontSmall)  { TTF_CloseFont(m_fontSmall);  m_fontSmall  = nullptr; }
     
     if (m_renderer) { SDL_DestroyRenderer(m_renderer); m_renderer = nullptr; }
-    if (m_window) { SDL_DestroyWindow(m_window); m_window = nullptr; }
+    if (m_window)   { SDL_DestroyWindow(m_window);     m_window   = nullptr; }
     
     IMG_Quit();
     TTF_Quit();

@@ -7,6 +7,7 @@
 #include <string>
 #include <functional>
 #include <cstdint>
+#include <atomic>
 
 namespace ss {
 
@@ -18,24 +19,28 @@ struct HttpResponse {
 };
 
 // Lightweight HTTP client using libcurl
+// All methods are thread-safe: each call creates its own CURL handle.
 class HttpClient {
 public:
     HttpClient();
     ~HttpClient();
 
-    // Synchronous GET — returns response body
-    HttpResponse get(const std::string& url);
+    // Synchronous GET — returns response body.
+    // timeout_s: per-request override (0 = use default 60s)
+    HttpResponse get(const std::string& url, int timeout_s = 0);
 
     // Download binary data (for images) into a buffer
     HttpResponse downloadBytes(const std::string& url);
 
-    // Set timeout in seconds (default: 10s)
-    void setTimeout(int seconds) {
-        m_timeout = seconds;
-    }
+    // Signal all in-flight requests to abort immediately
+    void cancel() { m_cancelled.store(true,  std::memory_order_relaxed); }
+
+    // Reset cancel flag so the client can be used again
+    void reset()  { m_cancelled.store(false, std::memory_order_relaxed); }
 
 private:
-    int m_timeout = 60; // seconds — generous for Render.com cold-starts
+    static constexpr int DEFAULT_TIMEOUT = 60; // seconds
+    std::atomic<bool> m_cancelled{false};
 };
 
 } // namespace ss

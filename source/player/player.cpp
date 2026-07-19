@@ -315,11 +315,12 @@ void Player::play(const std::string& url, const std::string& headers) {
         mpv_set_option_string(m_mpv, "http-header-fields", "");
     }
 
-    // Restore audio in case a previous stop() muted it
+    // Restore audio from a previous stop() — use 'volume' not 'ao-volume'
+    // (ao-volume and ao-mute are read-only on Switch)
     int unmuteVal = 0;
-    mpv_set_property(m_mpv, "mute", MPV_FORMAT_FLAG, &unmuteVal);
+    mpv_set_property(m_mpv, "mute",   MPV_FORMAT_FLAG,   &unmuteVal);
     double fullVol = 100.0;
-    mpv_set_property(m_mpv, "ao-volume", MPV_FORMAT_DOUBLE, &fullVol);
+    mpv_set_property(m_mpv, "volume", MPV_FORMAT_DOUBLE, &fullVol);
 
     // Explicitly unpause on the mpv handle when starting a new stream
     int pauseVal = 0;
@@ -353,17 +354,21 @@ void Player::togglePlay() {
 
 void Player::stop() {
     if (!m_mpv) return;
-    // Immediately mute to prevent audio bleed while mpv drains its buffer
+
+    // 1. Software mute + zero volume — instant silence in the pipeline
+    //    (ao-mute is read-only on Switch, so we use mute + volume=0)
     int muteVal = 1;
-    mpv_set_property(m_mpv, "mute", MPV_FORMAT_FLAG, &muteVal);
+    mpv_set_property(m_mpv, "mute",   MPV_FORMAT_FLAG,   &muteVal);
     double zeroVol = 0.0;
-    mpv_set_property(m_mpv, "ao-volume", MPV_FORMAT_DOUBLE, &zeroVol);
-    // Pause then stop (stop is async — mute ensures silence during drain)
+    mpv_set_property(m_mpv, "volume", MPV_FORMAT_DOUBLE, &zeroVol);
+
+    // 2. Pause immediately, then issue the async stop command
     int pauseVal = 1;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &pauseVal);
     const char* cmd[] = {"stop", nullptr};
     mpv_command(m_mpv, cmd);
-    m_paused = true;
+
+    m_paused   = true;
     m_finished = true;
 }
 

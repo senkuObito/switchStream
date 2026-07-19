@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <exception>
 #include <condition_variable>
+#include <chrono>
 
 namespace ss {
 struct CatalogRow;
@@ -37,6 +38,7 @@ private:
     void render();
     void renderHome();
     void renderSearch();
+    void detailWorkerLoop();
     void renderDetail();
     void renderPlayer();
     void renderLibrary();
@@ -105,7 +107,10 @@ private:
     
     bool m_detailEpisodeSelected = false;
     int m_detailEpisodeIndex = 0;
-    std::vector<Video> m_detailEpisodes;
+    std::vector<Video> m_detailEpisodes;       // ALL episodes (all seasons)
+    std::vector<int>   m_detailSeasons;        // sorted unique season numbers
+    int m_detailSeasonFilter = 0;              // index into m_detailSeasons (0 = first season)
+
 
     int m_libraryIndex = 0;
     int m_addonIndex = 0;
@@ -132,8 +137,17 @@ private:
     std::mutex m_searchMutex;
     std::thread m_searchThread;
     std::atomic<bool> m_loadingDetail{false};
-    std::thread m_detailLoadingThread;
     std::atomic<int> m_detailGeneration{0};
+    
+    // Persistent worker thread to prevent thread exhaustion
+    std::thread m_detailWorkerThread;
+    std::mutex m_workerMutex;
+    std::condition_variable m_workerCv;
+    bool m_workerRunning = false;
+    int m_workerTask = 0; // 0=none, 1=meta+streams, 2=episode_streams
+    std::string m_workerType;
+    std::string m_workerId;
+    int m_workerGen = 0;
     std::thread m_installThread;
     uint32_t m_osdShowTime = 0;
 
@@ -193,5 +207,10 @@ private:
     bool m_downloadWorkerRunning = false;
     std::condition_variable m_downloadQueueCV;
     void downloadWorkerLoop();
+
+    // Shutdown coordination — allows sleeping threads to wake immediately
+    std::atomic<bool> m_shuttingDown{false};
+    std::mutex m_shutdownMtx;
+    std::condition_variable m_shutdownCv;
 };
 } // namespace ss

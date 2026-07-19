@@ -11,6 +11,7 @@
 #include <fstream>
 #include <algorithm>
 #include <future>
+#include <vector>
 
 namespace ss {
 
@@ -77,13 +78,23 @@ bool AddonManager::loadConfig(const std::string& configPath) {
                 addon.manifest.id = a["id"].GetString();
             }
 
-            // Try to fetch manifest (will fall back to lazy/on-the-fly fetching if network is not ready)
-            // (REMOVED: Do not fetch manifests synchronously during startup to avoid black screen delays)
-            // Manifests will be fetched asynchronously by ensureManifest when needed.
-            
+            // Deduplicate by manifest ID on load — prevents two list entries for
+            // the same addon (e.g. Pengu plain URL + Pengu configured URL).
+            // Manifests without an ID (not yet fetched) are always added.
             {
                 std::lock_guard<std::mutex> lock(m_addonsMutex);
-                m_addons.push_back(std::move(addon));
+                bool dupId = false;
+                if (!addon.manifest.id.empty()) {
+                    for (auto& existing : m_addons) {
+                        if (existing.manifest.id == addon.manifest.id) {
+                            dupId = true;
+                            break;
+                        }
+                    }
+                }
+                if (!dupId) {
+                    m_addons.push_back(std::move(addon));
+                }
             }
         }
     }
@@ -139,7 +150,7 @@ std::vector<InstalledAddon> AddonManager::getAddons() const {
 }
 
 bool AddonManager::installAddon(const std::string& transportUrl) {
-    // Check if already installed
+    // Check if already installed by URL
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
         for (auto& a : m_addons) {
@@ -156,6 +167,16 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
 
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
+        // Deduplicate by manifest ID — same addon, different URL (e.g. Pengu)
+        if (!addon.manifest.id.empty()) {
+            for (auto& a : m_addons) {
+                if (a.manifest.id == addon.manifest.id) {
+                    a.transportUrl = transportUrl;
+                    a.manifest     = addon.manifest;
+                    return true;
+                }
+            }
+        }
         m_addons.push_back(std::move(addon));
     }
     return true;
@@ -172,10 +193,10 @@ void AddonManager::removeAddon(const std::string& addonId) {
 
 void AddonManager::toggleAddon(const std::string& addonId) {
     std::lock_guard<std::mutex> lock(m_addonsMutex);
+    // Toggle ALL entries with this ID — handles any lingering duplicates
     for (auto& a : m_addons) {
         if (a.manifest.id == addonId) {
             a.enabled = !a.enabled;
-            break;
         }
     }
 }
@@ -203,7 +224,6 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
     for (auto& res : addon.manifest.resources) {
         if (res.name != resource) continue;
 
-        // If resource has specific types, check them
         if (!res.types.empty()) {
             bool typeMatch = false;
             for (auto& t : res.types) {
@@ -213,7 +233,6 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
             if (!typeMatch) continue;
         }
 
-        // If resource has id prefixes, check them
         if (!id.empty() && !res.idPrefixes.empty()) {
             bool prefixMatch = false;
             for (auto& prefix : res.idPrefixes) {
@@ -231,117 +250,111 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
 
         return true;
     }
-
-    // Some addons list resources as simple strings (no types/prefixes)
-    // In that case, the resource name in manifest.resources matches directly
     return false;
 }
 
+// ─── Parallel home catalog fetch ─────────────────────────────────────────────
+// Each addon is fetched concurrently via std::async so total load time is
+// the slowest single addon instead of the sum of all addon times.
+
 std::vector<CatalogRow> AddonManager::getHomeCatalogs(const std::string& type) {
-    std::vector<CatalogRow> rows;
     std::vector<InstalledAddon> localAddons;
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
         localAddons = m_addons;
     }
 
-    std::vector<std::future<std::vector<CatalogRow>>> futures;
+    using RowVec = std::vector<CatalogRow>;
+    std::vector<std::future<RowVec>> futures;
+    futures.reserve(localAddons.size());
 
     for (auto addon : localAddons) {
         if (!addon.enabled) continue;
-        
-        futures.push_back(std::async(std::launch::deferred, [this, addon, type]() mutable {
-            std::vector<CatalogRow> rows;
-            ensureManifest(addon);
+        futures.push_back(std::async(std::launch::async,
+            [this, addon, type]() mutable -> RowVec {
+                ensureManifest(addon);
+                RowVec rows;
+                for (auto& cat : addon.manifest.catalogs) {
+                    if (!type.empty() && cat.type != type) continue;
+                    if (cat.hasRequiredExtras) continue;
 
-            for (auto& cat : addon.manifest.catalogs) {
-                if (!type.empty() && cat.type != type) continue;
+                    CatalogRow row;
+                    row.addonName    = addon.manifest.name;
+                    row.catalogName  = cat.name.empty() ? cat.id : cat.name;
+                    row.type         = cat.type;
+                    row.catalogId    = cat.id;
+                    row.transportUrl = addon.transportUrl;
 
-                // Skip catalogs that require extra parameters we can't provide
-                if (cat.hasRequiredExtras) continue;
-
-                CatalogRow row;
-                row.addonName   = addon.manifest.name;
-                row.catalogName = cat.name.empty() ? cat.id : cat.name;
-                row.type        = cat.type;
-                row.catalogId   = cat.id;
-                row.transportUrl = addon.transportUrl;
-
-                CatalogResponse resp;
-                if (m_client.fetchCatalog(addon.manifest, cat.type, cat.id, 0, resp)) {
-                    row.items = std::move(resp.metas);
+                    CatalogResponse resp;
+                    if (m_client.fetchCatalog(addon.manifest, cat.type, cat.id, 0, resp)) {
+                        row.items = std::move(resp.metas);
+                    }
+                    if (!row.items.empty()) {
+                        rows.push_back(std::move(row));
+                    }
                 }
-
-                if (!row.items.empty()) {
-                    rows.push_back(std::move(row));
-                }
-            }
-            return rows;
-        }));
+                return rows;
+            }));
     }
 
-    for (auto& f : futures) {
-        auto fetchedRows = f.get();
-        for (auto& r : fetchedRows) {
-            rows.push_back(std::move(r));
-        }
+    std::vector<CatalogRow> rows;
+    for (auto& fut : futures) {
+        auto addonRows = fut.get();
+        for (auto& r : addonRows) rows.push_back(std::move(r));
     }
-
     return rows;
 }
 
+// ─── Parallel search ─────────────────────────────────────────────────────────
+
 std::vector<MetaItem> AddonManager::search(const std::string& query,
                                             const std::string& type) {
-    std::vector<MetaItem> results;
     std::vector<InstalledAddon> localAddons;
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
         localAddons = m_addons;
     }
 
-    std::vector<std::future<std::vector<MetaItem>>> futures;
+    using ItemVec = std::vector<MetaItem>;
+    std::vector<std::future<ItemVec>> futures;
+    futures.reserve(localAddons.size());
 
     for (auto addon : localAddons) {
         if (!addon.enabled) continue;
-        
-        futures.push_back(std::async(std::launch::deferred, [this, addon, query, type]() mutable {
-            std::vector<MetaItem> addonResults;
-            ensureManifest(addon);
-
-            for (auto& cat : addon.manifest.catalogs) {
-                if (!type.empty() && cat.type != type) continue;
-
-                // Only search catalogs that explicitly support search
-                bool supportsSearch = false;
-                for (auto& extra : cat.extraSupported) {
-                    if (extra == "search") { supportsSearch = true; break; }
-                }
-                if (!supportsSearch) continue;
-
-                CatalogResponse resp;
-                if (m_client.searchCatalog(addon.manifest, cat.type, cat.id, query, resp)) {
-                    printf("[AddonManager] Addon '%s' (%s) returned %zu search results for query '%s'\n",
-                           addon.manifest.name.c_str(), cat.type.c_str(), resp.metas.size(), query.c_str());
-                    for (auto& meta : resp.metas) {
-                        meta.addonName = addon.manifest.name;
-                        addonResults.push_back(std::move(meta));
+        futures.push_back(std::async(std::launch::async,
+            [this, addon, query, type]() mutable -> ItemVec {
+                ensureManifest(addon);
+                ItemVec results;
+                for (auto& cat : addon.manifest.catalogs) {
+                    if (!type.empty() && cat.type != type) continue;
+                    bool supportsSearch = false;
+                    for (auto& extra : cat.extraSupported) {
+                        if (extra == "search") { supportsSearch = true; break; }
                     }
-                } else {
-                    printf("[AddonManager] Addon '%s' (%s) search failed for query '%s'\n",
-                           addon.manifest.name.c_str(), cat.type.c_str(), query.c_str());
+                    if (!supportsSearch) continue;
+
+                    CatalogResponse resp;
+                    if (m_client.searchCatalog(addon.manifest, cat.type, cat.id, query, resp)) {
+                        printf("[AddonManager] Addon '%s' (%s) returned %zu search results for '%s'\n",
+                               addon.manifest.name.c_str(), cat.type.c_str(), resp.metas.size(), query.c_str());
+                        for (auto& meta : resp.metas) {
+                            meta.addonName = addon.manifest.name;
+                            results.push_back(std::move(meta));
+                        }
+                    } else {
+                        printf("[AddonManager] Addon '%s' (%s) search failed for '%s'\n",
+                               addon.manifest.name.c_str(), cat.type.c_str(), query.c_str());
+                    }
                 }
-            }
-            return addonResults;
-        }));
+                return results;
+            }));
     }
 
-    for (auto& f : futures) {
-        auto fetchedResults = f.get();
-        for (auto& r : fetchedResults) {
-            results.push_back(std::move(r));
-        }
+    std::vector<MetaItem> results;
+    for (auto& fut : futures) {
+        auto items = fut.get();
+        for (auto& item : items) results.push_back(std::move(item));
     }
-
     return results;
 }
 
@@ -356,47 +369,45 @@ bool AddonManager::getMeta(const std::string& type, const std::string& id,
     for (auto& addon : localAddons) {
         ensureManifest(addon);
         if (!addonHandles(addon, "meta", type, id)) continue;
-
         if (m_client.fetchMeta(addon.manifest, type, id, out))
             return true;
     }
     return false;
 }
 
+// ─── Parallel stream fetch ────────────────────────────────────────────────────
+
 std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
                                                const std::string& videoId) {
-    std::vector<Stream> allStreams;
     std::vector<InstalledAddon> localAddons;
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
         localAddons = m_addons;
     }
 
-    std::vector<std::future<std::vector<Stream>>> futures;
+    using StreamVec = std::vector<Stream>;
+    std::vector<std::future<StreamVec>> futures;
+    futures.reserve(localAddons.size());
 
-    for (auto& addon : localAddons) {
-        futures.push_back(std::async(std::launch::deferred, [this, addon, type, videoId]() mutable {
-            std::vector<Stream> streams;
-            ensureManifest(addon);
-            if (!addonHandles(addon, "stream", type, videoId)) return streams;
-
-            StreamResponse resp;
-            if (m_client.fetchStreams(addon.manifest, type, videoId, resp)) {
-                for (auto& s : resp.streams) {
-                    streams.push_back(std::move(s));
+    for (auto addon : localAddons) {
+        if (!addonHandles(addon, "stream", type, videoId)) continue;
+        futures.push_back(std::async(std::launch::async,
+            [this, addon, type, videoId]() mutable -> StreamVec {
+                ensureManifest(addon);
+                StreamVec streams;
+                StreamResponse resp;
+                if (m_client.fetchStreams(addon.manifest, type, videoId, resp)) {
+                    for (auto& s : resp.streams) streams.push_back(std::move(s));
                 }
-            }
-            return streams;
-        }));
+                return streams;
+            }));
     }
 
-    for (auto& f : futures) {
-        auto streams = f.get();
-        for (auto& s : streams) {
-            allStreams.push_back(std::move(s));
-        }
+    std::vector<Stream> allStreams;
+    for (auto& fut : futures) {
+        auto streams = fut.get();
+        for (auto& s : streams) allStreams.push_back(std::move(s));
     }
-
     return allStreams;
 }
 
@@ -409,31 +420,14 @@ std::vector<Subtitle> AddonManager::getAllSubtitles(const std::string& type,
         localAddons = m_addons;
     }
 
-    std::vector<std::future<std::vector<Subtitle>>> futures;
-
     for (auto& addon : localAddons) {
-        futures.push_back(std::async(std::launch::deferred, [this, addon, type, id]() mutable {
-            std::vector<Subtitle> subs;
-            ensureManifest(addon);
-            if (!addonHandles(addon, "subtitles", type, id)) return subs;
-
-            SubtitleResponse resp;
-            if (m_client.fetchSubtitles(addon.manifest, type, id, resp)) {
-                for (auto& s : resp.subtitles) {
-                    subs.push_back(std::move(s));
-                }
-            }
-            return subs;
-        }));
-    }
-
-    for (auto& f : futures) {
-        auto subs = f.get();
-        for (auto& s : subs) {
-            allSubs.push_back(std::move(s));
+        ensureManifest(addon);
+        if (!addonHandles(addon, "subtitles", type, id)) continue;
+        SubtitleResponse resp;
+        if (m_client.fetchSubtitles(addon.manifest, type, id, resp)) {
+            for (auto& s : resp.subtitles) allSubs.push_back(std::move(s));
         }
     }
-
     return allSubs;
 }
 

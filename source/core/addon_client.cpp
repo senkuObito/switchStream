@@ -268,9 +268,7 @@ bool AddonClient::fetchStreams(const AddonManifest& addon,
     std::string url = baseUrl(addon.transportUrl)
         + "/stream/" + type + "/" + videoId + ".json";
 
-    m_http.setTimeout(30);
-    auto resp = m_http.get(url);
-    m_http.setTimeout(10);
+    auto resp = m_http.get(url, 30); // streams: 30s timeout
     if (!resp.ok()) return false;
 
     Document doc;
