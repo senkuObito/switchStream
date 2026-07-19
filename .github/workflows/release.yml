@@ -18,8 +18,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          sudo dkp-pacman -Syyu --noconfirm
-          sudo dkp-pacman -S --noconfirm \
+          dkp-pacman -Syyu --noconfirm
+          dkp-pacman -S --noconfirm \
             switch-pkg-config \
             switch-sdl2 \
             switch-sdl2_ttf \
