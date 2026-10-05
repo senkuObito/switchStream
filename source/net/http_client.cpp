@@ -8,9 +8,12 @@
 
 namespace ss {
 
+std::atomic<uint64_t> g_totalNetworkBytes{0};
+
 // curl write callback — appends data to std::string
 static size_t writeCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t totalSize = size * nmemb;
+    g_totalNetworkBytes.fetch_add(totalSize, std::memory_order_relaxed);
     std::string* str = static_cast<std::string*>(userp);
     str->append(static_cast<char*>(contents), totalSize);
     return totalSize;

@@ -87,6 +87,22 @@ public:
     bool getSuppressStreamAddonWarning() const { return m_suppressStreamAddonWarning; }
     void setSuppressStreamAddonWarning(bool suppress) { m_suppressStreamAddonWarning = suppress; }
 
+    // Resource / Memory Monitor settings
+    bool getShowResourceMonitor() const { return m_showResourceMonitor; }
+    void setShowResourceMonitor(bool show) { m_showResourceMonitor = show; }
+
+    bool getShowRamUsage() const { return m_showRamUsage; }
+    void setShowRamUsage(bool show) { m_showRamUsage = show; }
+
+    bool getShowCacheUsage() const { return m_showCacheUsage; }
+    void setShowCacheUsage(bool show) { m_showCacheUsage = show; }
+
+    bool getShowCpuUsage() const { return m_showCpuUsage; }
+    void setShowCpuUsage(bool show) { m_showCpuUsage = show; }
+
+    bool getShowDataUsage() const { return m_showDataUsage; }
+    void setShowDataUsage(bool show) { m_showDataUsage = show; }
+
     // Count enabled stream-providing addons (excluding catalog-only or subtitle-only addons)
     int getEnabledStreamAddonCount() const;
 
@@ -117,6 +133,11 @@ private:
     std::string m_subtitleLang = "en";
     bool m_enableTorrents = false; // Default: false (completely independent streaming by default)
     bool m_suppressStreamAddonWarning = false;
+    bool m_showResourceMonitor = false;
+    bool m_showRamUsage = true;
+    bool m_showCacheUsage = true;
+    bool m_showCpuUsage = true;
+    bool m_showDataUsage = true;
 };
 
 } // namespace ss

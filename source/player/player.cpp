@@ -107,6 +107,10 @@ bool Player::init(SDL_Window* window, SDL_Renderer* renderer, bool hwDecode) {
     mpv_set_option_string(m_mpv, "demuxer-readahead-secs", "60");
     mpv_set_option_string(m_mpv, "cache-secs", "120");
 
+    // High-resolution seeking for exact ±5s / ±10s skipping
+    mpv_set_option_string(m_mpv, "hr-seek", "yes");
+    mpv_set_option_string(m_mpv, "hr-seek-framedrop", "yes");
+
     // Audio Downmixing Configuration:
     // Downmix 5.1 and 7.1 surround sound to stereo so center channel (voice/dialogue)
     // is properly mixed into Nintendo Switch stereo speakers/headphones!
@@ -446,14 +450,14 @@ void Player::stop() {
 void Player::seek(double offsetSeconds) {
     if (!m_mpv) return;
     std::string pos = std::to_string(offsetSeconds);
-    const char* cmd[] = {"seek", pos.c_str(), "relative", nullptr};
+    const char* cmd[] = {"seek", pos.c_str(), "relative+exact", nullptr};
     mpv_command(m_mpv, cmd);
 }
 
 void Player::seekAbsolute(double positionSeconds) {
     if (!m_mpv) return;
     std::string pos = std::to_string(positionSeconds);
-    const char* cmd[] = {"seek", pos.c_str(), "absolute", nullptr};
+    const char* cmd[] = {"seek", pos.c_str(), "absolute+exact", nullptr};
     mpv_command(m_mpv, cmd);
 }
 

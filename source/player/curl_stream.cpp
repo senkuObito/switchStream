@@ -2,8 +2,12 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
 
 namespace ss {
+
+extern std::atomic<uint64_t> g_totalNetworkBytes;
 
 static const size_t RING_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB — optimal for Switch memory & multiple concurrent HLS streams
 
@@ -74,6 +78,51 @@ int CurlStream::xferInfoCallback(void* clientp, curl_off_t dltotal, curl_off_t d
     return 0;
 }
 
+size_t CurlStream::headerCallback(char* buffer, size_t size, size_t nitems, void* userdata) {
+    size_t total = size * nitems;
+    CurlStream* self = static_cast<CurlStream*>(userdata);
+    if (!self) return total;
+
+    std::string line(buffer, total);
+    while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
+        line.pop_back();
+    }
+
+    if (line.size() >= 14) {
+        std::string low = line;
+        for (char& c : low) c = (char)tolower((unsigned char)c);
+        if (low.rfind("content-length:", 0) == 0) {
+            size_t col = line.find(':');
+            if (col != std::string::npos) {
+                const char* val = line.c_str() + col + 1;
+                while (*val == ' ' || *val == '\t') val++;
+                char* endp = nullptr;
+                long long len = strtoll(val, &endp, 10);
+                if (endp != val && len > 0) {
+                    std::unique_lock<std::mutex> lock(self->m_mutex);
+                    if (self->m_totalSize <= 0) {
+                        self->m_totalSize = self->m_position + (int64_t)len;
+                    }
+                }
+            }
+        } else if (low.rfind("content-range:", 0) == 0) {
+            // e.g. bytes 1000-264327/264328
+            size_t slash = line.find('/');
+            if (slash != std::string::npos) {
+                const char* val = line.c_str() + slash + 1;
+                while (*val == ' ' || *val == '\t') val++;
+                char* endp = nullptr;
+                long long tot = strtoll(val, &endp, 10);
+                if (endp != val && tot > 0) {
+                    std::unique_lock<std::mutex> lock(self->m_mutex);
+                    self->m_totalSize = (int64_t)tot;
+                }
+            }
+        }
+    }
+    return total;
+}
+
 size_t CurlStream::writeCallback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     CurlStream* self = static_cast<CurlStream*>(userdata);
     size_t totalBytes = size * nmemb;
@@ -111,6 +160,7 @@ size_t CurlStream::writeCallback(char* ptr, size_t size, size_t nmemb, void* use
 
         self->m_bufferCount += toWrite;
         bytesWritten += toWrite;
+        g_totalNetworkBytes.fetch_add(toWrite, std::memory_order_relaxed);
 
         self->m_cv_read.notify_all();
     }
@@ -138,6 +188,10 @@ void CurlStream::curlThreadFunc(int64_t offset) {
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 15L);
+
+    // Header inspection for instant Content-Length and Content-Range parsing
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, &CurlStream::headerCallback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, this);
 
     // Immediate cancellation hook
     curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);

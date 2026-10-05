@@ -22,6 +22,7 @@ private:
     void startThread(int64_t offset);
     void stopThread();
     static size_t writeCallback(char* ptr, size_t size, size_t nmemb, void* userdata);
+    static size_t headerCallback(char* buffer, size_t size, size_t nitems, void* userdata);
     static int xferInfoCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow);
     void curlThreadFunc(int64_t offset);
 

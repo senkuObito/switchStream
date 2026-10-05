@@ -11,6 +11,8 @@
 
 namespace ss {
 
+extern std::atomic<uint64_t> g_totalNetworkBytes;
+
 // Simple HTTP response
 struct HttpResponse {
     int statusCode = 0;

@@ -21,6 +21,8 @@
 
 #ifdef __SWITCH__
 #include <switch.h>
+#else
+#include <sys/resource.h>
 #endif
 #include "torrent/torrent.h"
 #include "torrent/torrent_stream.h"
@@ -58,10 +60,9 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     {"Cinemeta", "The official addon for movie and series catalogs & search.", "https://v3-cinemeta.strem.io/manifest.json"},
     {"yastream", "Stream Asian dramas, series and movies directly with multiple providers.", "https://yastream.tamthai.de/manifest.json"},
     {"K-Drama Crush", "Asian and Korean drama catalog (drama feeds).", "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json"},
+    {"Streaming Catalogs", "Trending movies & series from Netflix, HBO Max, Disney+, Prime Video, Apple TV+.", "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json"},
     {"IndiaStreams", "Trending movies and shows from Indian platforms (Tamil, Hindi, etc.).", "https://indiastreams.rdata.in/manifest.json"},
     {"Indian Regional Catalog", "Indian regional movies catalog by language (Tamil, Telugu, Hindi).", "https://83e20802dcf1-indian-streams.baby-beamup.club/manifest.json"},
-    {"Streaming Catalogs", "Catalogs from Netflix, Disney+, HBO, Prime, etc.", "https://7a82163c306e-streaming-catalogs.baby-beamup.club/manifest.json"},
-    {"CyberFlix Catalogs", "Movie and series catalogs sorted by streaming provider.", "https://cyberflix.elfhosted.com/manifest.json"},
     {"TMDB Collections", "Movie collections grouped by franchise.", "https://61ab9c85a149-tmdb-collections.baby-beamup.club/manifest.json"},
     {"Dramayo", "Asian dramas, series and movies catalog & streams.", "https://dramayo.stream/manifest.json"},
     {"AnimeStream", "Anime streaming catalog and metadata provider.", "https://animestream-addon.keypop3750.workers.dev/manifest.json"},
@@ -75,9 +76,7 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     {"TorrentsDB", "TorrentsDB multi-tracker torrent stream search.", "https://torrentsdb.com/manifest.json"},
     {"StreamViX | ElfHosted", "StreamViX multi-source HTTP streams provider.", "https://streamvix.hayd.uk/manifest.json"},
     {"NoDebrid", "Direct HTTP/HLS streams without requiring Debrid subscriptions.", "https://nodebrid.fly.dev/manifest.json"},
-    {"StreamAsia (Offline)", "Defunct/offline - use Dramayo or yastream for Asian dramas.", "https://stremio-dramacool-addon.xyz/manifest.json"},
     {"Flix Streams", "HTTP streams from multiple sources.", "https://flixnest.app/flix-streams/manifest.json"},
-    {"Nebula Streams", "HTTP streams from multiple sources.", "https://nebulastreams.onrender.com/manifest.json"},
     {"MovieBox", "HTTP streams for movies and series.", "https://moviebox-cfa7.onrender.com/manifest.json"},
     {"Sword Watch", "HTTP streams (currently offline - Vercel deployment disabled).", "https://sword-watch.vercel.app/manifest.json"},
     {"Comet | ElfHosted", "Fast torrent/debrid stream search.", "https://comet.elfhosted.com/manifest.json"},
@@ -215,20 +214,19 @@ bool App::init() {
             "https://torrentio.strem.fun/manifest.json",
             "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
             "https://dramayo.stream/manifest.json",
-            "https://cyberflix.elfhosted.com/manifest.json",
+            "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json",
             "https://yastream.tamthai.de/manifest.json",
             "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
             "https://free.flixnest.app/manifest.json",
             "https://opensubtitles-v3.strem.io/manifest.json",
             "https://watchhub.strem.io/manifest.json",
-            "https://badboysxs-morpheus.hf.space/manifest.json",
             "https://stremio.yukistreams.xyz/manifest.json",
             "https://sword-watch.vercel.app/manifest.json",
             "https://nagare.nexioapp.org/manifest.json"
         };
         bool updatedAddons = false;
 
-        // Automatically uninstall deprecated/removed addons (Pengu, Anime Kitsu, AIOStreams)
+        // Automatically uninstall deprecated/removed/offline addons
         for (const auto& a : m_addonManager.getAddons()) {
             std::string tUrl = a.transportUrl;
             std::string aName = a.manifest.name;
@@ -241,9 +239,13 @@ bool App::init() {
             bool isKitsu = (tUrl.find("anime-kitsu") != std::string::npos || aName.find("kitsu") != std::string::npos || aId.find("kitsu") != std::string::npos);
             bool isAio = (tUrl.find("aiostream") != std::string::npos || aName.find("aiostream") != std::string::npos || aId.find("aiostream") != std::string::npos);
             bool isMediaFusion = (tUrl.find("mediafusion") != std::string::npos || aName.find("mediafusion") != std::string::npos || aId.find("mediafusion") != std::string::npos);
+            bool isNebula = (tUrl.find("nebulastreams") != std::string::npos || aName.find("nebula") != std::string::npos || aId.find("nebulastreams") != std::string::npos);
+            bool isMorpheus = (tUrl.find("morpheus") != std::string::npos || aName.find("morpheus") != std::string::npos || aId.find("morpheus") != std::string::npos);
+            bool isStreamAsia = (tUrl.find("streamasia") != std::string::npos || tUrl.find("dramacool") != std::string::npos || aId.find("streamasia") != std::string::npos);
+            bool isCyberflix = (tUrl.find("cyberflix") != std::string::npos || aId.find("cyberflix") != std::string::npos);
 
-            if (isPengu || isKitsu || isAio || isMediaFusion) {
-                printf("[App] Removing deprecated/removed addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
+            if (isPengu || isKitsu || isAio || isMediaFusion || isNebula || isMorpheus || isStreamAsia || isCyberflix) {
+                printf("[App] Removing deprecated/offline addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
                 m_addonManager.removeAddon(a.transportUrl);
                 m_addonManager.removeAddon(a.manifest.id);
                 updatedAddons = true;
@@ -715,8 +717,13 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
             }
         }
         if (kDown & HidNpadButton_L) m_screen = Screen::LIBRARY;
-        if (kDown & HidNpadButton_R) m_screen = Screen::ADDONS;
+        if (kDown & HidNpadButton_R) {
+            m_addonTab = 0;
+            m_addonIndex = 0;
+            m_screen = Screen::ADDONS;
+        }
         if (kDown & HidNpadButton_X) {
+            updateCacheSizes();
             m_settingsIndex = 0;
             m_screen = Screen::SETTINGS;
         }
@@ -925,52 +932,131 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
         break;
 
     case Screen::ADDONS: {
+        if (m_loading) break; // Ignore inputs while action is processing
+
         auto addons = m_addonManager.getAddons();
-        
-        if (kDown & HidNpadButton_Right) {
-            m_addonDiscoverPane = true;
+        int installedCount = (int)addons.size();
+        int discoverCount = (int)DISCOVER_ADDONS.size();
+
+        // Shoulder buttons switch tabs
+        if (kDown & HidNpadButton_L) {
+            m_addonTab = 0;
         }
-        if (kDown & HidNpadButton_Left) {
-            m_addonDiscoverPane = false;
+        if (kDown & HidNpadButton_R) {
+            m_addonTab = 1;
         }
 
-        if (kDown & HidNpadButton_Down) {
-            if (!m_addonDiscoverPane) {
-                m_addonIndex++;
-                if (m_addonIndex >= (int)addons.size()) m_addonIndex = addons.empty() ? 0 : (int)addons.size() - 1;
-            } else {
-                m_addonDiscoverIndex++;
-                if (m_addonDiscoverIndex >= (int)DISCOVER_ADDONS.size()) m_addonDiscoverIndex = (int)DISCOVER_ADDONS.size() - 1;
-            }
-        }
-        if (kDown & HidNpadButton_Up) {
-            if (!m_addonDiscoverPane) {
-                m_addonIndex--;
-                if (m_addonIndex < 0) m_addonIndex = 0;
-            } else {
-                m_addonDiscoverIndex--;
-                if (m_addonDiscoverIndex < 0) m_addonDiscoverIndex = 0;
-            }
-        }
+        if (m_addonTab == 0) {
+            // ─── Installed Tab (3 columns x 2 rows) ───
+            if (installedCount > 0) {
+                if (kDown & HidNpadButton_Right) {
+                    if (m_addonIndex % 3 < 2 && m_addonIndex + 1 < installedCount) {
+                        m_addonIndex++;
+                    } else if (m_addonIndex % 3 == 2) {
+                        m_addonTab = 1;
+                        m_addonDiscoverIndex = 0;
+                    }
+                }
+                if (kDown & HidNpadButton_Left) {
+                    if (m_addonIndex % 3 > 0) {
+                        m_addonIndex--;
+                    }
+                }
+                if (kDown & HidNpadButton_Down) {
+                    if (m_addonIndex + 3 < installedCount) {
+                        m_addonIndex += 3;
+                    } else if (m_addonIndex < installedCount - 1) {
+                        m_addonIndex = installedCount - 1;
+                    }
+                }
+                if (kDown & HidNpadButton_Up) {
+                    if (m_addonIndex >= 3) {
+                        m_addonIndex -= 3;
+                    }
+                }
 
-        if (kDown & HidNpadButton_A) {
-            if (m_addonDiscoverPane) {
-                if (!m_loading) {
-                    // Install community addon
-                    if (m_addonDiscoverIndex >= 0 && m_addonDiscoverIndex < (int)DISCOVER_ADDONS.size()) {
+                if (kDown & HidNpadButton_A) {
+                    if (m_addonIndex >= 0 && m_addonIndex < installedCount) {
+                        std::string addonId = addons[m_addonIndex].manifest.id;
+                        bool newState = !addons[m_addonIndex].enabled;
+                        m_loading = true;
+                        m_addonActionText = newState ? "Enabling addon & updating catalogs..." : "Disabling addon...";
+                        if (m_installThread.joinable()) {
+                            m_installThread.join();
+                        }
+                        m_installThread = std::thread([this, addonId]() {
+                            m_addonManager.toggleAddon(addonId);
+                            m_addonManager.saveConfig(CONFIG_FILE);
+                            loadHomeCatalogs(true);
+                            m_loading = false;
+                            m_addonActionText = "";
+                        });
+                    }
+                }
+
+                if (kDown & HidNpadButton_X) {
+                    if (m_addonIndex >= 0 && m_addonIndex < installedCount) {
+                        std::string addonId = addons[m_addonIndex].manifest.id;
+                        std::string addonUrl = addons[m_addonIndex].transportUrl;
+                        m_loading = true;
+                        m_addonActionText = "Removing addon & updating catalogs...";
+                        if (m_installThread.joinable()) {
+                            m_installThread.join();
+                        }
+                        m_installThread = std::thread([this, addonId, addonUrl]() {
+                            m_addonManager.removeAddon(addonId);
+                            m_addonManager.removeAddon(addonUrl);
+                            m_addonManager.saveConfig(CONFIG_FILE);
+                            if (m_addonIndex > 0) m_addonIndex--;
+                            loadHomeCatalogs(true);
+                            m_loading = false;
+                            m_addonActionText = "";
+                        });
+                    }
+                }
+            }
+        } else {
+            // ─── Discover Tab (3 columns x 2 rows) ───
+            if (discoverCount > 0) {
+                if (kDown & HidNpadButton_Right) {
+                    if (m_addonDiscoverIndex % 3 < 2 && m_addonDiscoverIndex + 1 < discoverCount) {
+                        m_addonDiscoverIndex++;
+                    }
+                }
+                if (kDown & HidNpadButton_Left) {
+                    if (m_addonDiscoverIndex % 3 > 0) {
+                        m_addonDiscoverIndex--;
+                    } else if (m_addonDiscoverIndex % 3 == 0) {
+                        m_addonTab = 0;
+                        m_addonIndex = 0;
+                    }
+                }
+                if (kDown & HidNpadButton_Down) {
+                    if (m_addonDiscoverIndex + 3 < discoverCount) {
+                        m_addonDiscoverIndex += 3;
+                    } else if (m_addonDiscoverIndex < discoverCount - 1) {
+                        m_addonDiscoverIndex = discoverCount - 1;
+                    }
+                }
+                if (kDown & HidNpadButton_Up) {
+                    if (m_addonDiscoverIndex >= 3) {
+                        m_addonDiscoverIndex -= 3;
+                    }
+                }
+
+                if (kDown & HidNpadButton_A) {
+                    if (m_addonDiscoverIndex >= 0 && m_addonDiscoverIndex < discoverCount) {
                         std::string url = DISCOVER_ADDONS[m_addonDiscoverIndex].url;
-                        
-                        // Check if already installed
-                        bool installed = false;
-                        for (auto& a : addons) {
+                        bool alreadyInstalled = false;
+                        for (const auto& a : addons) {
                             if (a.transportUrl == url) {
-                                installed = true;
+                                alreadyInstalled = true;
                                 break;
                             }
                         }
-                        
-                        if (!installed) {
+                        if (!alreadyInstalled) {
                             m_loading = true;
+                            m_addonActionText = "Installing " + DISCOVER_ADDONS[m_addonDiscoverIndex].name + "...";
                             if (m_installThread.joinable()) {
                                 m_installThread.join();
                             }
@@ -979,55 +1065,63 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
                                 m_addonManager.saveConfig(CONFIG_FILE);
                                 loadHomeCatalogs(true);
                                 m_loading = false;
+                                m_addonActionText = "";
                             });
                         }
                     }
                 }
-            } else {
-                // Toggle enabled state of installed addon
-                if (m_addonIndex >= 0 && m_addonIndex < (int)addons.size()) {
-                    m_addonManager.toggleAddon(addons[m_addonIndex].manifest.id);
-                    m_addonManager.saveConfig(CONFIG_FILE);
-                    loadHomeCatalogs(true); // Refresh catalogs immediately!
-                }
-            }
-        }
 
-        if (kDown & HidNpadButton_X) {
-            // Remove selected addon from installed list
-            if (!m_addonDiscoverPane) {
-                if (m_addonIndex >= 0 && m_addonIndex < (int)addons.size()) {
-                    m_addonManager.removeAddon(addons[m_addonIndex].manifest.id);
-                    m_addonManager.saveConfig(CONFIG_FILE);
-                    if (m_addonIndex > 0) m_addonIndex--;
-                    loadHomeCatalogs(true); // Refresh catalogs immediately!
+                if (kDown & HidNpadButton_X) {
+                    if (m_addonDiscoverIndex >= 0 && m_addonDiscoverIndex < discoverCount) {
+                        std::string url = DISCOVER_ADDONS[m_addonDiscoverIndex].url;
+                        std::string targetId;
+                        for (const auto& a : addons) {
+                            if (a.transportUrl == url) {
+                                targetId = a.manifest.id;
+                                break;
+                            }
+                        }
+                        if (!targetId.empty()) {
+                            m_loading = true;
+                            m_addonActionText = "Removing addon & updating catalogs...";
+                            if (m_installThread.joinable()) {
+                                m_installThread.join();
+                            }
+                            m_installThread = std::thread([this, targetId, url]() {
+                                m_addonManager.removeAddon(targetId);
+                                m_addonManager.removeAddon(url);
+                                m_addonManager.saveConfig(CONFIG_FILE);
+                                loadHomeCatalogs(true);
+                                m_loading = false;
+                                m_addonActionText = "";
+                            });
+                        }
+                    }
                 }
-            }
-        }
-
-        if (kDown & HidNpadButton_L) {
-            std::string host = m_addonManager.getTorrServerHost();
-            openSwkbd(host, "Enter TorrServer URL (e.g. http://192.168.1.100:8090)");
-            if (!host.empty()) {
-                m_addonManager.setTorrServerHost(host);
-                m_addonManager.saveConfig(CONFIG_FILE);
             }
         }
 
         if (kDown & HidNpadButton_Y) {
-            // Add custom addon by URL
             std::string url;
             openSwkbd(url, "Enter addon manifest URL");
             if (!url.empty()) {
-                m_addonManager.installAddon(url);
-                m_addonManager.saveConfig(CONFIG_FILE);
-                loadHomeCatalogs(true);  // refresh
+                m_loading = true;
+                m_addonActionText = "Installing custom addon...";
+                if (m_installThread.joinable()) {
+                    m_installThread.join();
+                }
+                m_installThread = std::thread([this, url]() {
+                    m_addonManager.installAddon(url);
+                    m_addonManager.saveConfig(CONFIG_FILE);
+                    loadHomeCatalogs(true);
+                    m_loading = false;
+                    m_addonActionText = "";
+                });
             }
         }
 
         if (kDown & HidNpadButton_B) {
             m_screen = Screen::HOME;
-            loadHomeCatalogs(true);
         }
         break;
     }
@@ -1294,9 +1388,70 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
     }
 
     case Screen::SETTINGS: {
+        if (m_showClearCacheModal) {
+            // Modal dialog input navigation
+            if (kDown & (HidNpadButton_Up | HidNpadButton_Left)) {
+                m_clearCacheItemIndex = (m_clearCacheItemIndex > 0) ? m_clearCacheItemIndex - 1 : 3;
+            }
+            if (kDown & (HidNpadButton_Down | HidNpadButton_Right)) {
+                m_clearCacheItemIndex = (m_clearCacheItemIndex < 3) ? m_clearCacheItemIndex + 1 : 0;
+            }
+            if (kDown & HidNpadButton_A) {
+                if (m_clearCacheItemIndex == 0) m_clearPosters = !m_clearPosters;
+                else if (m_clearCacheItemIndex == 1) m_clearLogs = !m_clearLogs;
+                else if (m_clearCacheItemIndex == 2) m_clearHomeCache = !m_clearHomeCache;
+                else if (m_clearCacheItemIndex == 3) m_clearHistory = !m_clearHistory;
+            }
+            if (kDown & HidNpadButton_X) {
+                // Execute cleanup of checked items
+                if (m_clearPosters) {
+                    cleanCatalogImageCache();
+                }
+                if (m_clearLogs) {
+                    FILE* f = fopen(LOG_FILE, "w");
+                    if (f) {
+                        fputs("[App] Log truncated by user request.\n", f);
+                        fclose(f);
+                    }
+                }
+                if (m_clearHomeCache) {
+                    std::remove(HOME_CACHE);
+                    {
+                        std::lock_guard<std::mutex> lock(m_homeMutex);
+                        m_homeCatalogs.clear();
+                    }
+                    loadHomeCatalogs(true);
+                }
+                if (m_clearHistory) {
+                    std::remove(LIB_FILE);
+                    m_library = Library();
+                }
+                updateCacheSizes();
+                m_showClearCacheModal = false;
+            }
+            if (kDown & HidNpadButton_B) {
+                m_showClearCacheModal = false;
+            }
+            break;
+        }
+
+        // Build list of active setting IDs to map m_settingsIndex
+        std::vector<int> settingIds = {0, 1, 2, 3, 4}; // Torrents, Host, HwDec, SubLang, ResMon
+        if (m_addonManager.getShowResourceMonitor()) {
+            settingIds.push_back(5); // RAM
+            settingIds.push_back(6); // Cache
+            settingIds.push_back(7); // CPU
+            settingIds.push_back(8); // Data
+        }
+        settingIds.push_back(9);  // Clean Cache & Reset
+        settingIds.push_back(10); // Back to Home
+
+        int totalSettings = (int)settingIds.size();
+        if (m_settingsIndex >= totalSettings) m_settingsIndex = totalSettings - 1;
+
         if (kDown & HidNpadButton_Down) {
             m_settingsIndex++;
-            if (m_settingsIndex >= 6) m_settingsIndex = 5;
+            if (m_settingsIndex >= totalSettings) m_settingsIndex = totalSettings - 1;
         }
         if (kDown & HidNpadButton_Up) {
             m_settingsIndex--;
@@ -1304,72 +1459,55 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
         }
         if (kDown & HidNpadButton_B) {
             m_screen = Screen::HOME;
+            break;
         }
         if (kDown & HidNpadButton_A) {
-            if (m_settingsIndex == 0) {
-                // Toggle Enable Torrents
+            int currentId = settingIds[m_settingsIndex];
+            if (currentId == 0) {
                 m_addonManager.setEnableTorrents(!m_addonManager.getEnableTorrents());
                 m_addonManager.saveConfig(CONFIG_FILE);
-            } else if (m_settingsIndex == 1) {
-                // Edit TorrServer Host
+            } else if (currentId == 1) {
                 std::string host = m_addonManager.getTorrServerHost();
                 openSwkbd(host, "Enter TorrServer URL (e.g. http://192.168.1.100:8090)");
                 if (!host.empty()) {
                     m_addonManager.setTorrServerHost(host);
                     m_addonManager.saveConfig(CONFIG_FILE);
                 }
-            } else if (m_settingsIndex == 2) {
-                // Toggle Hardware Decoding
+            } else if (currentId == 2) {
                 bool enabled = !m_addonManager.getHwDecode();
                 m_addonManager.setHwDecode(enabled);
                 m_addonManager.saveConfig(CONFIG_FILE);
                 m_player.setHwDec(enabled);
-            } else if (m_settingsIndex == 3) {
-                // Edit Preferred Subtitle Language
+            } else if (currentId == 3) {
                 std::string lang = m_addonManager.getSubtitleLang();
                 openSwkbd(lang, "Enter Subtitle Language Code (e.g. en, es, fr)");
                 if (!lang.empty()) {
                     m_addonManager.setSubtitleLang(lang);
                     m_addonManager.saveConfig(CONFIG_FILE);
                 }
-            } else if (m_settingsIndex == 4) {
-                // Clean Cache & Reset
-                cleanCatalogImageCache();
-                std::remove(CONFIG_FILE);
-                std::remove(LIB_FILE);
-                m_library = Library();
-                // Re-initialize config (will populate defaults since file is gone)
-                m_addonManager.loadConfig(CONFIG_FILE);
-                if (m_addonManager.getAddons().empty()) {
-                    const std::vector<std::string> defaultAddons = {
-                        "https://v3-cinemeta.strem.io/manifest.json",
-                        "https://torrentio.strem.fun/manifest.json",
-                        "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
-                        "https://dramayo.stream/manifest.json",
-                        "https://cyberflix.elfhosted.com/manifest.json",
-                        "https://yastream.tamthai.de/manifest.json",
-                        "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
-                        "https://free.flixnest.app/manifest.json",
-                        "https://opensubtitles-v3.strem.io/manifest.json",
-                        "https://watchhub.strem.io/manifest.json",
-                        "https://badboysxs-morpheus.hf.space/manifest.json",
-                        "https://stremio.yukistreams.xyz/manifest.json",
-                        "https://sword-watch.vercel.app/manifest.json",
-                        "https://nagare.nexioapp.org/manifest.json"
-                    };
-                    for (const auto& url : defaultAddons) {
-                        m_addonManager.installAddon(url);
-                    }
-                    m_addonManager.saveConfig(CONFIG_FILE);
-                }
-                {
-                    std::lock_guard<std::mutex> lock(m_homeMutex);
-                    m_homeCatalogs.clear();
-                }
-                m_settingsIndex = 0;
-                m_screen = Screen::HOME;
-                loadHomeCatalogs(true);
-            } else if (m_settingsIndex == 5) {
+            } else if (currentId == 4) {
+                // Toggle Resource Monitor Master
+                bool cur = m_addonManager.getShowResourceMonitor();
+                m_addonManager.setShowResourceMonitor(!cur);
+                m_addonManager.saveConfig(CONFIG_FILE);
+            } else if (currentId == 5) {
+                m_addonManager.setShowRamUsage(!m_addonManager.getShowRamUsage());
+                m_addonManager.saveConfig(CONFIG_FILE);
+            } else if (currentId == 6) {
+                m_addonManager.setShowCacheUsage(!m_addonManager.getShowCacheUsage());
+                m_addonManager.saveConfig(CONFIG_FILE);
+            } else if (currentId == 7) {
+                m_addonManager.setShowCpuUsage(!m_addonManager.getShowCpuUsage());
+                m_addonManager.saveConfig(CONFIG_FILE);
+            } else if (currentId == 8) {
+                m_addonManager.setShowDataUsage(!m_addonManager.getShowDataUsage());
+                m_addonManager.saveConfig(CONFIG_FILE);
+            } else if (currentId == 9) {
+                // Open Clean Storage & Cache Modal
+                updateCacheSizes();
+                m_showClearCacheModal = true;
+                m_clearCacheItemIndex = 0;
+            } else if (currentId == 10) {
                 m_screen = Screen::HOME;
             }
         }
@@ -1740,146 +1878,309 @@ void App::handleTouch(int x, int y) {
     }
 
     case Screen::ADDONS: {
-        if (x >= 1100 && x <= 1220 && y >= 50 && y <= 75) {
-            m_screen = Screen::HOME;
-            loadHomeCatalogs(true);
-            return;
-        }
+        if (m_loading) return;
 
-        if (y >= 50 && y <= 75) {
-            if (x >= 600 && x <= 750) {
-                std::string url;
-                openSwkbd(url, "Enter addon manifest URL");
-                if (!url.empty()) {
-                    m_addonManager.installAddon(url);
-                    m_addonManager.saveConfig(CONFIG_FILE);
-                    loadHomeCatalogs(true);
-                }
+        // Sub-Tab switching
+        int subTabY = 66;
+        if (y >= subTabY - 10 && y <= subTabY + 35) {
+            if (x >= 480 && x <= 640) {
+                m_addonTab = 0;
+                m_addonIndex = 0;
+                return;
+            }
+            if (x >= 650 && x <= 780) {
+                m_addonTab = 1;
+                m_addonDiscoverIndex = 0;
                 return;
             }
         }
 
-        // Left pane: Installed Addons
-        if (x >= 40 && x <= 620 && y >= 80 && y <= 600) {
-            m_addonDiscoverPane = false;
-            auto addons = m_addonManager.getAddons();
-            if (addons.empty()) return;
-
-            int maxVisible = 7;
-            int startIndex = 0;
-            if (m_addonIndex >= maxVisible) {
-                startIndex = m_addonIndex - maxVisible + 1;
+        // Top nav bar click
+        int navX = 280, navY = 14;
+        if (y >= navY && y <= navY + 40) {
+            if (x >= navX + 4 && x < navX + 104) {
+                m_screen = Screen::HOME;
+                return;
             }
-
-            int itemY = 80 + 45;
-            for (int i = startIndex; i < (int)addons.size() && (itemY + 60) <= (80 + 520 - 20); i++) {
-                if (x >= 45 && x <= 615 && y >= itemY - 2 && y <= itemY + 54) {
-                    m_addonIndex = i;
-                    m_addonManager.toggleAddon(addons[i].manifest.id);
-                    m_addonManager.saveConfig(CONFIG_FILE);
-                    loadHomeCatalogs(true);
-                    return;
+            if (x >= navX + 104 && x < navX + 218) {
+                openSwkbd(m_searchQuery, "Search movies & series");
+                if (!m_searchQuery.empty()) {
+                    performSearch(m_searchQuery);
+                    m_screen = Screen::SEARCH;
                 }
-                itemY += 60;
+                return;
+            }
+            if (x >= navX + 218 && x < navX + 332) {
+                m_screen = Screen::LIBRARY;
+                return;
+            }
+            if (x >= navX + 446 && x < navX + 576) {
+                updateCacheSizes();
+                m_settingsIndex = 0;
+                m_screen = Screen::SETTINGS;
+                return;
             }
         }
-        // Right pane: Discover Addons
-        else if (x >= 660 && x <= 1240 && y >= 80 && y <= 600) {
-            m_addonDiscoverPane = true;
-            int maxVisible = 7;
-            int startIndex = 0;
-            if (m_addonDiscoverIndex >= maxVisible) {
-                startIndex = m_addonDiscoverIndex - maxVisible + 1;
-            }
+        if (x >= SCREEN_W - 130 && x <= SCREEN_W - 40 && y >= 18 && y <= 50) {
+            m_screen = Screen::HOME;
+            return;
+        }
 
-            int itemY = 80 + 45;
-            for (int i = startIndex; i < (int)DISCOVER_ADDONS.size() && (itemY + 60) <= (80 + 520 - 20); i++) {
-                if (x >= 665 && x <= 1235 && y >= itemY - 2 && y <= itemY + 54) {
-                    m_addonDiscoverIndex = i;
-                    m_addonManager.installAddon(DISCOVER_ADDONS[i].url);
-                    m_addonManager.saveConfig(CONFIG_FILE);
-                    loadHomeCatalogs(true);
-                    return;
+        // 3-Column x 2-Row Card Grid
+        auto addons = m_addonManager.getAddons();
+        int totalItems = (m_addonTab == 0) ? (int)addons.size() : (int)DISCOVER_ADDONS.size();
+        int curIndex = (m_addonTab == 0) ? m_addonIndex : m_addonDiscoverIndex;
+        int curRow = (totalItems > 0) ? (curIndex / 3) : 0;
+        int startRow = (curRow >= 2) ? curRow - 1 : 0;
+        int startIdx = startRow * 3;
+        int endIdx = std::min(totalItems, startIdx + 6);
+
+        int cardW = 380, cardH = 240;
+        int startX = 40, startY = 114;
+        int gapX = 30, gapY = 16;
+
+        for (int i = startIdx; i < endIdx; ++i) {
+            int rel = i - startIdx;
+            int r = rel / 3;
+            int c = rel % 3;
+            int cx = startX + c * (cardW + gapX);
+            int cy = startY + r * (cardH + gapY);
+
+            if (x >= cx && x <= cx + cardW && y >= cy && y <= cy + cardH) {
+                if (m_addonTab == 0) m_addonIndex = i;
+                else m_addonDiscoverIndex = i;
+
+                int btnY = cy + cardH - 42;
+                int btnW = cardW - 32;
+                int btnH = 30;
+
+                if (y >= btnY && y <= btnY + btnH) {
+                    if (m_addonTab == 0) {
+                        // Left half: Toggle
+                        if (x <= cx + 16 + btnW / 2) {
+                            std::string addonId = addons[i].manifest.id;
+                            bool newState = !addons[i].enabled;
+                            m_loading = true;
+                            m_addonActionText = newState ? "Enabling addon & updating catalogs..." : "Disabling addon...";
+                            if (m_installThread.joinable()) m_installThread.join();
+                            m_installThread = std::thread([this, addonId]() {
+                                m_addonManager.toggleAddon(addonId);
+                                m_addonManager.saveConfig(CONFIG_FILE);
+                                loadHomeCatalogs(true);
+                                m_loading = false;
+                                m_addonActionText = "";
+                            });
+                        } else {
+                            // Right half: Uninstall
+                            std::string addonId = addons[i].manifest.id;
+                            std::string addonUrl = addons[i].transportUrl;
+                            m_loading = true;
+                            m_addonActionText = "Removing addon & updating catalogs...";
+                            if (m_installThread.joinable()) m_installThread.join();
+                            m_installThread = std::thread([this, addonId, addonUrl]() {
+                                m_addonManager.removeAddon(addonId);
+                                m_addonManager.removeAddon(addonUrl);
+                                m_addonManager.saveConfig(CONFIG_FILE);
+                                if (m_addonIndex > 0) m_addonIndex--;
+                                loadHomeCatalogs(true);
+                                m_loading = false;
+                                m_addonActionText = "";
+                            });
+                        }
+                    } else {
+                        std::string url = DISCOVER_ADDONS[i].url;
+                        bool alreadyInstalled = false;
+                        std::string targetId;
+                        for (const auto& a : addons) {
+                            if (a.transportUrl == url) {
+                                alreadyInstalled = true;
+                                targetId = a.manifest.id;
+                                break;
+                            }
+                        }
+
+                        if (alreadyInstalled) {
+                            if (x > cx + 16 + btnW / 2) {
+                                // Clicked Uninstall
+                                m_loading = true;
+                                m_addonActionText = "Removing addon & updating catalogs...";
+                                if (m_installThread.joinable()) m_installThread.join();
+                                m_installThread = std::thread([this, targetId, url]() {
+                                    m_addonManager.removeAddon(targetId);
+                                    m_addonManager.removeAddon(url);
+                                    m_addonManager.saveConfig(CONFIG_FILE);
+                                    loadHomeCatalogs(true);
+                                    m_loading = false;
+                                    m_addonActionText = "";
+                                });
+                            }
+                        } else {
+                            // Clicked Install
+                            m_loading = true;
+                            m_addonActionText = "Installing " + DISCOVER_ADDONS[i].name + "...";
+                            if (m_installThread.joinable()) m_installThread.join();
+                            m_installThread = std::thread([this, url]() {
+                                m_addonManager.installAddon(url);
+                                m_addonManager.saveConfig(CONFIG_FILE);
+                                loadHomeCatalogs(true);
+                                m_loading = false;
+                                m_addonActionText = "";
+                            });
+                        }
+                    }
                 }
-                itemY += 60;
+                return;
             }
         }
         break;
     }
 
     case Screen::SETTINGS: {
+        if (m_showClearCacheModal) {
+            int modalW = 640, modalH = 430;
+            int modalX = (SCREEN_W - modalW) / 2;
+            int modalY = (SCREEN_H - modalH) / 2;
+
+            // Check if tapped on rows
+            int rowY = modalY + 95;
+            for (int i = 0; i < 4; ++i) {
+                if (x >= modalX + 35 && x <= modalX + modalW - 35 && y >= rowY - 4 && y <= rowY + 44) {
+                    m_clearCacheItemIndex = i;
+                    if (i == 0) m_clearPosters = !m_clearPosters;
+                    else if (i == 1) m_clearLogs = !m_clearLogs;
+                    else if (i == 2) m_clearHomeCache = !m_clearHomeCache;
+                    else if (i == 3) m_clearHistory = !m_clearHistory;
+                    return;
+                }
+                rowY += 56;
+            }
+
+            // Clean Selected button
+            int btn1W = 210, btnH = 38;
+            int btn1X = modalX + 50;
+            int btnY = modalY + modalH - 58;
+            if (x >= btn1X && x <= btn1X + btn1W && y >= btnY && y <= btnY + btnH) {
+                if (m_clearPosters) cleanCatalogImageCache();
+                if (m_clearLogs) {
+                    FILE* f = fopen(LOG_FILE, "w");
+                    if (f) { fputs("[App] Log truncated.\n", f); fclose(f); }
+                }
+                if (m_clearHomeCache) {
+                    std::remove(HOME_CACHE);
+                    {
+                        std::lock_guard<std::mutex> lock(m_homeMutex);
+                        m_homeCatalogs.clear();
+                    }
+                    loadHomeCatalogs(true);
+                }
+                if (m_clearHistory) {
+                    std::remove(LIB_FILE);
+                    m_library = Library();
+                }
+                updateCacheSizes();
+                m_showClearCacheModal = false;
+                return;
+            }
+
+            // Cancel button
+            int btn2W = 160;
+            int btn2X = modalX + modalW - 50 - btn2W;
+            if (x >= btn2X && x <= btn2X + btn2W && y >= btnY && y <= btnY + btnH) {
+                m_showClearCacheModal = false;
+                return;
+            }
+
+            // Outside modal dismiss
+            if (x < modalX || x > modalX + modalW || y < modalY || y > modalY + modalH) {
+                m_showClearCacheModal = false;
+                return;
+            }
+            return;
+        }
+
         if (x >= 40 && x <= 120 && y >= 20 && y <= 75) {
             m_screen = Screen::HOME;
             return;
         }
 
-        for (int i = 0; i < 6; i++) {
-            int itemMinY = 99 + i * 88;
-            int itemMaxY = itemMinY + 76;
-            if (x >= 55 && x <= 1225 && y >= itemMinY && y <= itemMaxY) {
+        std::vector<int> settingIds = {0, 1, 2, 3, 4};
+        if (m_addonManager.getShowResourceMonitor()) {
+            settingIds.push_back(5); // RAM
+            settingIds.push_back(6); // Cache
+            settingIds.push_back(7); // CPU
+            settingIds.push_back(8); // Data
+        }
+        settingIds.push_back(9);  // Clean Cache
+        settingIds.push_back(10); // Back to Home
+
+        int maxVisible = 6;
+        int startIdx = 0;
+        if (m_settingsIndex >= maxVisible) {
+            startIdx = m_settingsIndex - maxVisible + 1;
+        }
+
+        int panelX = 40;
+        int panelY = 88;
+        int panelW = 1200;
+        int itemY = panelY + 12;
+
+        for (int i = startIdx; i < (int)settingIds.size(); ++i) {
+            int id = settingIds[i];
+            bool isSub = (id >= 5 && id <= 8);
+            int cardH = isSub ? 60 : 72;
+            int indentX = isSub ? 45 : 15;
+            int cardW = panelW - indentX - 15;
+
+            if (x >= panelX + indentX && x <= panelX + indentX + cardW && y >= itemY - 4 && y <= itemY - 4 + cardH) {
                 m_settingsIndex = i;
-                if (m_settingsIndex == 0) {
+                if (id == 0) {
                     m_addonManager.setEnableTorrents(!m_addonManager.getEnableTorrents());
                     m_addonManager.saveConfig(CONFIG_FILE);
-                } else if (m_settingsIndex == 1) {
+                } else if (id == 1) {
                     std::string host = m_addonManager.getTorrServerHost();
                     openSwkbd(host, "Enter TorrServer URL (e.g. http://192.168.1.100:8090)");
                     if (!host.empty()) {
                         m_addonManager.setTorrServerHost(host);
                         m_addonManager.saveConfig(CONFIG_FILE);
                     }
-                } else if (m_settingsIndex == 2) {
+                } else if (id == 2) {
                     bool enabled = !m_addonManager.getHwDecode();
                     m_addonManager.setHwDecode(enabled);
                     m_addonManager.saveConfig(CONFIG_FILE);
                     m_player.setHwDec(enabled);
-                } else if (m_settingsIndex == 3) {
+                } else if (id == 3) {
                     std::string lang = m_addonManager.getSubtitleLang();
                     openSwkbd(lang, "Enter Subtitle Language Code (e.g. en, es, fr)");
                     if (!lang.empty()) {
                         m_addonManager.setSubtitleLang(lang);
                         m_addonManager.saveConfig(CONFIG_FILE);
                     }
-                } else if (m_settingsIndex == 4) {
-                    cleanCatalogImageCache();
-                    std::remove(CONFIG_FILE);
-                    std::remove(LIB_FILE);
-                    m_library = Library();
-                    m_addonManager.loadConfig(CONFIG_FILE);
-                    if (m_addonManager.getAddons().empty()) {
-                        const std::vector<std::string> defaultAddons = {
-                            "https://v3-cinemeta.strem.io/manifest.json",
-                            "https://torrentio.strem.fun/manifest.json",
-                            "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
-                            "https://dramayo.stream/manifest.json",
-                            "https://cyberflix.elfhosted.com/manifest.json",
-                            "https://yastream.tamthai.de/manifest.json",
-                            "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
-                            "https://free.flixnest.app/manifest.json",
-                            "https://opensubtitles-v3.strem.io/manifest.json",
-                            "https://watchhub.strem.io/manifest.json",
-                            "https://badboysxs-morpheus.hf.space/manifest.json",
-                            "https://stremio.yukistreams.xyz/manifest.json",
-                            "https://sword-watch.vercel.app/manifest.json",
-                            "https://nagare.nexioapp.org/manifest.json"
-                        };
-                        for (const auto& url : defaultAddons) {
-                            m_addonManager.installAddon(url);
-                        }
-                        m_addonManager.saveConfig(CONFIG_FILE);
-                    }
-                    {
-                        std::lock_guard<std::mutex> lock(m_homeMutex);
-                        m_homeCatalogs.clear();
-                    }
-                    m_settingsIndex = 0;
-                    m_screen = Screen::HOME;
-                    loadHomeCatalogs(true);
-                } else if (m_settingsIndex == 5) {
+                } else if (id == 4) {
+                    bool cur = m_addonManager.getShowResourceMonitor();
+                    m_addonManager.setShowResourceMonitor(!cur);
+                    m_addonManager.saveConfig(CONFIG_FILE);
+                } else if (id == 5) {
+                    m_addonManager.setShowRamUsage(!m_addonManager.getShowRamUsage());
+                    m_addonManager.saveConfig(CONFIG_FILE);
+                } else if (id == 6) {
+                    m_addonManager.setShowCacheUsage(!m_addonManager.getShowCacheUsage());
+                    m_addonManager.saveConfig(CONFIG_FILE);
+                } else if (id == 7) {
+                    m_addonManager.setShowCpuUsage(!m_addonManager.getShowCpuUsage());
+                    m_addonManager.saveConfig(CONFIG_FILE);
+                } else if (id == 8) {
+                    m_addonManager.setShowDataUsage(!m_addonManager.getShowDataUsage());
+                    m_addonManager.saveConfig(CONFIG_FILE);
+                } else if (id == 9) {
+                    updateCacheSizes();
+                    m_showClearCacheModal = true;
+                    m_clearCacheItemIndex = 0;
+                } else if (id == 10) {
                     m_screen = Screen::HOME;
                 }
                 return;
             }
+            itemY += cardH + 10;
         }
         break;
     }
@@ -2144,10 +2445,9 @@ void App::handleTouch(int x, int y) {
         int btnSeekRW = 80;
         int btnSubW = 60;
         int btnAudW = 60;
-        int btnQualW = 60;
         int btnGap = 20;
 
-        int totalRowW = btnBackW + btnSeekLW + btnPlayW + btnSeekRW + btnSubW + btnAudW + btnQualW + (6 * btnGap);
+        int totalRowW = btnBackW + btnSeekLW + btnPlayW + btnSeekRW + btnSubW + btnAudW + (5 * btnGap);
         int rowStartX = panelX + (panelW - totalRowW) / 2;
 
         int backX = rowStartX;
@@ -2156,7 +2456,6 @@ void App::handleTouch(int x, int y) {
         int seekRX = pillX + btnPlayW + btnGap;
         int utilX = seekRX + btnSeekRW + btnGap;
         int audX = utilX + btnSubW + btnGap;
-        int qualX = audX + btnAudW + btnGap;
 
         int barX = panelX + 30;
         int barY = panelY + 26;
@@ -2217,11 +2516,6 @@ void App::handleTouch(int x, int y) {
                     }
                 }
                 printf("[Touch] Audio menu opened\n");
-            }
-            else if (x >= qualX && x <= qualX + btnQualW) {
-                m_showQualityList = true;
-                m_qualityListIndex = m_detailStreamIndex;
-                printf("[Touch] Quality menu opened\n");
             } else {
                 m_osdShowTime = 0; // Tapped in button row but not on a button
             }
@@ -2286,6 +2580,7 @@ void App::render() {
     }
 
     drawNavBar();
+    renderResourceHUD();
     SDL_RenderPresent(m_renderer);
 }
 
@@ -3064,10 +3359,9 @@ void App::renderPlayer() {
             int btnSeekRW = 80;
             int btnSubW = 60;
             int btnAudW = 60;
-            int btnQualW = 60;
             int btnGap = 20;
 
-            int totalRowW = btnBackW + btnSeekLW + btnPlayW + btnSeekRW + btnSubW + btnAudW + btnQualW + (6 * btnGap);
+            int totalRowW = btnBackW + btnSeekLW + btnPlayW + btnSeekRW + btnSubW + btnAudW + (5 * btnGap);
             int rowStartX = panelX + (panelW - totalRowW) / 2;
 
             int backX = rowStartX;
@@ -3076,7 +3370,6 @@ void App::renderPlayer() {
             int seekRX = pillX + btnPlayW + btnGap;
             int utilX = seekRX + btnSeekRW + btnGap;
             int audX = utilX + btnSubW + btnGap;
-            int qualX = audX + btnAudW + btnGap;
 
             // BACK button
             drawFilledRoundRect(backX, ctrlY, btnBackW, 30, 8, {255, 80, 80, 20});
@@ -3112,20 +3405,8 @@ void App::renderPlayer() {
             drawRoundRect(audX, ctrlY, btnAudW, 30, 8, {255, 255, 255, 30});
             drawTextCentered("AUD", audX + btnAudW / 2, ctrlY + 5, {180, 180, 200, 255}, m_fontSmall);
 
-            // QUAL button — switch between available stream quality options
-            bool hasQuality = false;
-            {
-                std::lock_guard<std::mutex> lock(m_streamsMutex);
-                hasQuality = m_detailStreams.size() > 1;
-            }
-            SDL_Color qualColor = hasQuality ? SDL_Color{120, 220, 120, 255} : SDL_Color{100, 100, 120, 255};
-            SDL_Color qualBorder = hasQuality ? SDL_Color{60, 180, 60, 50}   : SDL_Color{255, 255, 255, 20};
-            drawFilledRoundRect(qualX, ctrlY, btnQualW, 30, 8, qualBorder);
-            drawRoundRect(qualX, ctrlY, btnQualW, 30, 8, {255, 255, 255, 30});
-            drawTextCentered("QUAL", qualX + btnQualW / 2, ctrlY + 5, qualColor, m_fontSmall);
-
             // Controller hints (centered with extra padding)
-            drawTextCentered("[A] Play/Pause   [L/R] -/+5s Seek   [Hold R] 2X Speed   [Y] Subs   [X] Audio   [ZL] Quality   [B] Back",
+            drawTextCentered("[A] Play/Pause   [L/R] -/+5s Seek   [Hold R] 2X Speed   [Y] Subs   [X] Audio   [B] Back",
                              SCREEN_W / 2, panelY + panelH - 26, {120, 120, 140, 180}, m_fontSmall);
         }
 
@@ -3352,6 +3633,7 @@ void App::renderPlayer() {
             drawTextCentered("2X  ▶▶", badgeX + badgeW / 2, badgeY + 6, ACCENT, m_fontNormal);
         }
 
+        renderResourceHUD();
         SDL_RenderPresent(m_renderer);
     }
 }
@@ -3867,214 +4149,536 @@ void App::renderLibrary() {
 }
 
 void App::renderAddons() {
-    drawText("Addon Manager", 40, 20, ACCENT, m_fontLarge);
-    drawText("[Left/Right] Switch Pane   [Up/Down] Scroll   [A] Toggle/Install   [X] Uninstall   [Y] Add URL   [L] Host   [B] Back", 40, 55, TEXT_SECONDARY, m_fontSmall);
+    // 1. Top Brand Logo & Navigation
+    drawText("SwitchStream", 40, 18, TEXT_PRIMARY, m_fontLarge);
 
-    std::string hostStr = "TorrServer Host: " + m_addonManager.getTorrServerHost();
-    drawText(hostStr, 800, 25, {150, 220, 255, 255}, m_fontSmall);
+    int navX = 280, navY = 14, navW = 580, navH = 40;
+    drawFilledRoundRect(navX, navY, navW, navH, 20, NAV_CONTAINER);
+    drawRoundRect(navX, navY, navW, navH, 20, NAV_BORDER);
 
-    // Left Pane: Installed Addons
-    int leftX = 40;
-    int leftY = 80;
-    int leftW = 580;
-    int leftH = 520;
-    
-    // Draw background glassmorphic panels
-    drawFilledRect(leftX, leftY, leftW, leftH, {0, 0, 0, 160}); // base panel
-    drawRect(leftX, leftY, leftW, leftH, {255, 255, 255, 25}); // border
-    
+    // Nav pills
+    int tab0X = navX + 4, tab0W = 96;
+    drawTextCentered("Home", tab0X + tab0W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+
+    int tab1X = navX + 104, tab1W = 110;
+    drawTextCentered("Search [Y]", tab1X + tab1W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+
+    int tab2X = navX + 218, tab2W = 110;
+    drawTextCentered("Library [L]", tab2X + tab2W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+
+    int tab3X = navX + 332, tab3W = 110;
+    drawFilledRoundRect(tab3X, navY + 4, tab3W, navH - 8, 16, ACCENT);
+    drawTextCentered("Addons", tab3X + tab3W / 2, navY + 9, {10, 14, 22, 255}, m_fontNormal);
+
+    int tab4X = navX + 446, tab4W = 126;
+    drawTextCentered("Settings [X]", tab4X + tab4W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+
+    // Right exit badge
+    drawFilledRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {26, 32, 46, 200});
+    drawRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {44, 52, 74, 180});
+    drawTextCentered("[+] Exit", SCREEN_W - 85, 23, TEXT_SECONDARY, m_fontSmall);
+
     auto addons = m_addonManager.getAddons();
-    int activeCount = 0;
-    for (const auto& a : addons) {
-        if (a.enabled) activeCount++;
-    }
-    int disabledCount = (int)addons.size() - activeCount;
-    std::string installedTitle = "Installed Addons (" + std::to_string(activeCount) + " Active, " + std::to_string(disabledCount) + " Inactive)";
+    int installedCount = (int)addons.size();
+    int discoverCount = (int)DISCOVER_ADDONS.size();
 
-    // Header
-    drawFilledRect(leftX, leftY, leftW, 35, {100, 120, 255, 30});
-    drawText(installedTitle, leftX + 15, leftY + 8, TEXT_PRIMARY, m_fontNormal);
-    
-    // Right Pane: Discover Addons
-    int rightX = 660;
-    int rightY = 80;
-    int rightW = 580;
-    int rightH = 520;
-    
-    drawFilledRect(rightX, rightY, rightW, rightH, {0, 0, 0, 160});
-    drawRect(rightX, rightY, rightW, rightH, {255, 255, 255, 25});
+    // 2. Sub-Tabs: Installed (N) | Discover
+    int tabInstX = 500, tabInstW = 130;
+    int tabDiscX = 660, tabDiscW = 90;
+    int subTabY = 66;
 
-    drawFilledRect(rightX, rightY, rightW, 35, {100, 120, 255, 30});
-    drawText("Discover Addons (Online Directory)", rightX + 15, rightY + 8, TEXT_PRIMARY, m_fontNormal);
-
-    // Active pane highlight borders
-    if (!m_addonDiscoverPane) {
-        drawRect(leftX - 2, leftY - 2, leftW + 4, leftH + 4, ACCENT);
+    std::string instTabTitle = "Installed (" + std::to_string(installedCount) + ")";
+    if (m_addonTab == 0) {
+        drawText(instTabTitle, tabInstX, subTabY, ACCENT, m_fontNormal);
+        drawFilledRoundRect(tabInstX - 4, subTabY + 26, tabInstW + 8, 3, 2, ACCENT);
+        drawText("Discover", tabDiscX, subTabY, TEXT_SECONDARY, m_fontNormal);
     } else {
-        drawRect(rightX - 2, rightY - 2, rightW + 4, rightH + 4, ACCENT);
+        drawText(instTabTitle, tabInstX, subTabY, TEXT_SECONDARY, m_fontNormal);
+        drawText("Discover", tabDiscX, subTabY, ACCENT, m_fontNormal);
+        drawFilledRoundRect(tabDiscX - 4, subTabY + 26, tabDiscW + 8, 3, 2, ACCENT);
     }
 
-    // Render Installed Addons
-    if (addons.empty()) {
-        drawText("No addons installed.", leftX + 20, leftY + 50, TEXT_SECONDARY);
+    // 3. 3-Column x 2-Row Card Grid
+    int cardW = 380;
+    int cardH = 240;
+    int startX = 40;
+    int startY = 114;
+    int gapX = 30;
+    int gapY = 16;
+
+    int totalItems = (m_addonTab == 0) ? installedCount : discoverCount;
+    int curIndex = (m_addonTab == 0) ? m_addonIndex : m_addonDiscoverIndex;
+
+    int curRow = (totalItems > 0) ? (curIndex / 3) : 0;
+    int startRow = (curRow >= 2) ? curRow - 1 : 0;
+    int startIdx = startRow * 3;
+    int endIdx = std::min(totalItems, startIdx + 6);
+
+    if (totalItems == 0) {
+        drawTextCentered("No addons found.", SCREEN_W / 2, SCREEN_H / 2, TEXT_SECONDARY, m_fontNormal);
     } else {
-        int itemY = leftY + 45;
-        // Make it scrollable
-        int maxVisible = 7;
-        int startIndex = 0;
-        if (!m_addonDiscoverPane && m_addonIndex >= maxVisible) {
-            startIndex = m_addonIndex - maxVisible + 1;
+        if (startRow > 0) {
+            drawTextCentered("▲ More addons above", SCREEN_W / 2, 100, TEXT_SECONDARY, m_fontSmall);
         }
 
-        if (startIndex > 0) {
-            drawText("^ More addons above...", leftX + 15, leftY + 38, TEXT_SECONDARY, m_fontSmall);
-        }
-        
-        for (int i = startIndex; i < (int)addons.size() && (itemY + 60) <= (leftY + leftH - 20); i++) {
-            // Draw visual divider line when transitioning from Active to Inactive addons
-            if (i > 0 && !addons[i].enabled && addons[i - 1].enabled) {
-                drawFilledRect(leftX + 15, itemY - 3, leftW - 30, 2, {255, 255, 255, 35});
-            }
+        for (int i = startIdx; i < endIdx; ++i) {
+            int rel = i - startIdx;
+            int r = rel / 3;
+            int c = rel % 3;
+            int x = startX + c * (cardW + gapX);
+            int y = startY + r * (cardH + gapY);
+            bool sel = (i == curIndex);
 
-            bool sel = (!m_addonDiscoverPane && i == m_addonIndex);
+            // Card Container
+            drawFilledRoundRect(x, y, cardW, cardH, 14, sel ? CARD_HL : CARD_COLOR);
+            drawRoundRect(x, y, cardW, cardH, 14, sel ? ACCENT : SDL_Color{255, 255, 255, 22});
             if (sel) {
-                drawFilledRect(leftX + 5, itemY - 2, leftW - 10, 56, CARD_HL);
-                drawRect(leftX + 5, itemY - 2, leftW - 10, 56, {255, 255, 255, 45});
+                drawRoundRect(x - 1, y - 1, cardW + 2, cardH + 2, 15, {0, 229, 255, 90});
             }
-            
-            std::string name = addons[i].manifest.name;
-            if (name.empty()) name = AddonManager::getAddonFallbackName(addons[i].transportUrl);
 
-            std::string badge = AddonManager::getAddonCategoryBadge(addons[i]);
-            std::string statusTag = addons[i].enabled ? " [Active]" : " [Inactive]";
-            std::string displayName = name + "  " + badge + statusTag;
+            std::string name, desc, ver, catLabel, badgeTag;
+            bool isActive = false;
+            bool isInstalled = false;
 
-            SDL_Color textColor = sel ? ACCENT : (addons[i].enabled ? TEXT_PRIMARY : SDL_Color{140, 140, 150, 200});
-            drawText(displayName, leftX + 15, itemY + 4, textColor, m_fontNormal);
-            
-            std::string desc = addons[i].manifest.description;
-            if (desc.empty()) desc = AddonManager::getAddonFallbackDesc(addons[i].transportUrl);
-            if (desc.size() > 65) desc = desc.substr(0, 62) + "...";
-            drawText(desc, leftX + 15, itemY + 26, TEXT_SECONDARY, m_fontSmall);
-            
-            itemY += 60;
-        }
+            if (m_addonTab == 0) {
+                const auto& a = addons[i];
+                name = a.manifest.name.empty() ? AddonManager::getAddonFallbackName(a.transportUrl) : a.manifest.name;
+                desc = a.manifest.description.empty() ? AddonManager::getAddonFallbackDesc(a.transportUrl) : a.manifest.description;
+                ver = a.manifest.version.empty() ? "1.0.0" : a.manifest.version;
+                catLabel = AddonManager::getAddonCategoryBadge(a);
+                isActive = a.enabled;
+                isInstalled = true;
+            } else {
+                const auto& d = DISCOVER_ADDONS[i];
+                name = d.name;
+                desc = d.description.empty() ? AddonManager::getAddonFallbackDesc(d.url) : d.description;
+                ver = "1.0.0";
+                std::string lowUrl = d.url;
+                if (lowUrl.find("opensubtitles") != std::string::npos) catLabel = "Subtitles Provider";
+                else if (lowUrl.find("torrent") != std::string::npos) catLabel = "Torrent Scraper";
+                else if (lowUrl.find("stream") != std::string::npos) catLabel = "HTTP Streams";
+                else catLabel = "Catalog Provider";
 
-        if (startIndex + maxVisible < (int)addons.size()) {
-            drawText("v More addons below...", leftX + 15, leftY + leftH - 18, TEXT_SECONDARY, m_fontSmall);
-        }
-    }
+                for (const auto& a : addons) {
+                    if (a.transportUrl == d.url) {
+                        isInstalled = true;
+                        isActive = a.enabled;
+                        break;
+                    }
+                }
+            }
 
-    // Render Discover Addons
-    int itemY = rightY + 45;
-    int maxVisible = 7;
-    int startIndex = 0;
-    if (m_addonDiscoverPane && m_addonDiscoverIndex >= maxVisible) {
-        startIndex = m_addonDiscoverIndex - maxVisible + 1;
-    }
+            // Avatar theme color & badge text
+            SDL_Color avBg = {34, 44, 64, 255};
+            SDL_Color avBd = {68, 88, 128, 200};
+            std::string avText = "EXT";
 
-    if (startIndex > 0) {
-        drawText("^ More addons above...", rightX + 15, rightY + 38, TEXT_SECONDARY, m_fontSmall);
-    }
-    
-    for (int i = startIndex; i < (int)DISCOVER_ADDONS.size() && (itemY + 60) <= (rightY + rightH - 20); i++) {
-        bool sel = (m_addonDiscoverPane && i == m_addonDiscoverIndex);
-        
-        // Check if this community addon is already installed
-        bool installed = false;
-        for (auto& a : addons) {
-            if (a.transportUrl == DISCOVER_ADDONS[i].url) {
-                installed = true;
-                break;
+            std::string lowName = name;
+            for (char& ch : lowName) ch = (char)tolower((unsigned char)ch);
+
+            if (lowName.find("cinemeta") != std::string::npos) {
+                avBg = {26, 52, 96, 255}; avBd = {48, 105, 195, 200}; avText = "CAT";
+            } else if (lowName.find("yastream") != std::string::npos) {
+                avBg = {22, 58, 42, 255}; avBd = {42, 138, 88, 200}; avText = "YA";
+            } else if (lowName.find("kdrama") != std::string::npos || lowName.find("k-drama") != std::string::npos) {
+                avBg = {88, 28, 58, 255}; avBd = {176, 58, 118, 200}; avText = "KD";
+            } else if (lowName.find("torrent") != std::string::npos) {
+                avBg = {16, 58, 72, 255}; avBd = {28, 138, 158, 200}; avText = "TOR";
+            } else if (lowName.find("subtitle") != std::string::npos || lowName.find("opensub") != std::string::npos) {
+                avBg = {74, 64, 24, 255}; avBd = {158, 138, 48, 200}; avText = "SUB";
+            } else if (lowName.find("streaming") != std::string::npos || lowName.find("netflix") != std::string::npos) {
+                avBg = {80, 24, 34, 255}; avBd = {160, 48, 68, 200}; avText = "STR";
+            } else if (catLabel.find("Torrent") != std::string::npos) {
+                avBg = {16, 58, 72, 255}; avBd = {28, 138, 158, 200}; avText = "TOR";
+            } else if (catLabel.find("Stream") != std::string::npos) {
+                avBg = {22, 58, 42, 255}; avBd = {42, 138, 88, 200}; avText = "STR";
+            }
+
+            int avX = x + 16, avY = y + 16, avW = 54, avH = 54;
+            drawFilledRoundRect(avX, avY, avW, avH, 12, avBg);
+            drawRoundRect(avX, avY, avW, avH, 12, avBd);
+            drawTextCentered(avText, avX + avW / 2, avY + 16, {255, 255, 255, 255}, m_fontNormal);
+
+            // Title & Category
+            int textX = x + 80;
+            std::string displayName = name;
+            if (displayName.size() > 18) displayName = displayName.substr(0, 16) + "..";
+            drawText(displayName, textX, y + 14, TEXT_PRIMARY, m_fontNormal);
+            drawText(catLabel, textX, y + 36, TEXT_SECONDARY, m_fontSmall);
+            drawText("v" + ver, textX, y + 54, {130, 138, 155, 255}, m_fontSmall);
+
+            // Status Pill (top-right of card)
+            int pillW = 68, pillH = 22;
+            int pillX = x + cardW - 16 - pillW;
+            int pillY = y + 16;
+
+            if (m_addonTab == 0) {
+                if (isActive) {
+                    drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {20, 65, 38, 220});
+                    drawRoundRect(pillX, pillY, pillW, pillH, 11, {45, 190, 85, 200});
+                    drawTextCentered("Active", pillX + pillW / 2, pillY + 3, {70, 240, 130, 255}, m_fontSmall);
+                } else {
+                    drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {36, 38, 48, 220});
+                    drawRoundRect(pillX, pillY, pillW, pillH, 11, {100, 105, 120, 160});
+                    drawTextCentered("Disabled", pillX + pillW / 2, pillY + 3, {150, 155, 170, 255}, m_fontSmall);
+                }
+            } else {
+                if (isInstalled) {
+                    drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {15, 55, 65, 220});
+                    drawRoundRect(pillX, pillY, pillW, pillH, 11, {0, 194, 203, 200});
+                    drawTextCentered("Installed", pillX + pillW / 2, pillY + 3, ACCENT, m_fontSmall);
+                } else {
+                    drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {25, 40, 75, 220});
+                    drawRoundRect(pillX, pillY, pillW, pillH, 11, {60, 110, 220, 180});
+                    drawTextCentered("Available", pillX + pillW / 2, pillY + 3, {130, 180, 255, 255}, m_fontSmall);
+                }
+            }
+
+            // Description
+            drawTextWrapped(desc, x + 16, y + 80, cardW - 32, {175, 182, 195, 255}, m_fontSmall);
+
+            // Bottom Action Pill
+            int btnY = y + cardH - 42;
+            int btnW = cardW - 32;
+            int btnH = 30;
+            drawFilledRoundRect(x + 16, btnY, btnW, btnH, 8, {26, 32, 46, 240});
+            drawRoundRect(x + 16, btnY, btnW, btnH, 8, {52, 64, 90, 200});
+
+            if (m_addonTab == 0) {
+                // Divider in center
+                drawFilledRect(x + 16 + btnW / 2, btnY + 5, 1, btnH - 10, {52, 64, 90, 200});
+                std::string toggleTxt = isActive ? "[A] Disable" : "[A] Enable";
+                drawTextCentered(toggleTxt, x + 16 + btnW / 4, btnY + 7, sel ? ACCENT : TEXT_PRIMARY, m_fontSmall);
+                drawTextCentered("[X] Uninstall", x + 16 + 3 * btnW / 4, btnY + 7, {255, 110, 110, 255}, m_fontSmall);
+            } else {
+                if (isInstalled) {
+                    drawFilledRect(x + 16 + btnW / 2, btnY + 5, 1, btnH - 10, {52, 64, 90, 200});
+                    drawTextCentered("Installed", x + 16 + btnW / 4, btnY + 7, {70, 240, 130, 255}, m_fontSmall);
+                    drawTextCentered("[X] Uninstall", x + 16 + 3 * btnW / 4, btnY + 7, {255, 110, 110, 255}, m_fontSmall);
+                } else {
+                    drawTextCentered("[A] Install Addon", x + 16 + btnW / 2, btnY + 7, sel ? ACCENT : TEXT_PRIMARY, m_fontSmall);
+                }
             }
         }
 
-        if (sel) {
-            drawFilledRect(rightX + 5, itemY - 2, rightW - 10, 56, CARD_HL);
-            drawRect(rightX + 5, itemY - 2, rightW - 10, 56, {255, 255, 255, 45});
+        if (endIdx < totalItems) {
+            drawTextCentered("▼ More addons below", SCREEN_W / 2, 630, TEXT_SECONDARY, m_fontSmall);
         }
-
-        std::string dUrl = DISCOVER_ADDONS[i].url;
-        std::string badge = "";
-        if (dUrl.find("opensubtitles") != std::string::npos) badge = "[Subtitles]";
-        else if (dUrl.find("torrent") != std::string::npos || dUrl.find("stream") != std::string::npos || dUrl.find("debrid") != std::string::npos) badge = "[Stream]";
-        else badge = "[Catalog]";
-
-        std::string displayTitle = DISCOVER_ADDONS[i].name + "  " + badge;
-        if (installed) displayTitle += " [Installed]";
-
-        drawText(displayTitle, rightX + 15, itemY + 4, sel ? ACCENT : (installed ? SDL_Color{100, 220, 140, 255} : TEXT_PRIMARY), m_fontNormal);
-        
-        std::string desc = DISCOVER_ADDONS[i].description;
-        if (desc.empty()) desc = AddonManager::getAddonFallbackDesc(dUrl);
-        if (desc.size() > 65) desc = desc.substr(0, 62) + "...";
-        drawText(desc, rightX + 15, itemY + 26, TEXT_SECONDARY, m_fontSmall);
-
-        // If we are currently loading/installing this addon, draw a small spinner
-        if (sel && m_loading) {
-            drawSpinner(rightX + rightW - 40, itemY + 25, 10);
-        }
-        
-        itemY += 60;
     }
-    if (startIndex + maxVisible < (int)DISCOVER_ADDONS.size()) {
-        drawText("v More addons below...", rightX + 15, rightY + rightH - 18, TEXT_SECONDARY, m_fontSmall);
+
+    // 4. Loading Modal Overlay when toggling/installing
+    if (m_loading) {
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 160});
+        int modalW = 460, modalH = 140;
+        int modalX = (SCREEN_W - modalW) / 2;
+        int modalY = (SCREEN_H - modalH) / 2;
+        drawFilledRoundRect(modalX, modalY, modalW, modalH, 16, {20, 26, 38, 250});
+        drawRoundRect(modalX, modalY, modalW, modalH, 16, ACCENT);
+
+        drawSpinner(modalX + modalW / 2, modalY + 45, 20);
+        std::string actText = m_addonActionText.empty() ? "Updating addons & reloading catalogs..." : m_addonActionText;
+        drawTextCentered(actText, modalX + modalW / 2, modalY + 90, TEXT_PRIMARY, m_fontNormal);
     }
 }
+
 void App::renderSettings() {
     drawText("System Settings", 40, 20, ACCENT, m_fontLarge);
     drawText("[Up/Down] Navigate   [A] Change/Toggle   [B] Back to Home", 40, 55, TEXT_SECONDARY, m_fontSmall);
 
     int panelX = 40;
-    int panelY = 90;
+    int panelY = 88;
     int panelW = 1200;
-    int panelH = 560;
+    int panelH = 562;
 
     // Base glassmorphic panel
     drawFilledRect(panelX, panelY, panelW, panelH, {0, 0, 0, 160});
     drawRect(panelX, panelY, panelW, panelH, {255, 255, 255, 25});
 
-    // 6 settings options
     struct SettingOption {
+        int id;
         std::string title;
         std::string description;
         std::string value;
+        bool isSubItem;
     };
 
     std::vector<SettingOption> options = {
-        {"Enable Torrent Streams", "Native on-device BitTorrent streaming using RAM circular buffer.", m_addonManager.getEnableTorrents() ? "ON (Enabled)" : "OFF (Disabled)"},
-        {"TorrServer Host URL", "Endpoint for streaming torrent-based media files.", m_addonManager.getTorrServerHost()},
-        {"Hardware Decoding", "Uses GPU-accelerated video decoding context (recommended).", m_addonManager.getHwDecode() ? "ON (Enabled)" : "OFF (Disabled)"},
-        {"Preferred Subtitle Language", "Default language code for media subtitle streams.", m_addonManager.getSubtitleLang()},
-        {"Clean Cache & Reset", "Deletes all cached metadata, history, and custom addons.", "Press [A] to clear"},
-        {"Back to Home", "Return to main screen.", ""}
+        {0, "Enable Torrent Streams", "Native on-device BitTorrent streaming using RAM circular buffer.", m_addonManager.getEnableTorrents() ? "ON (Enabled)" : "OFF (Disabled)", false},
+        {1, "TorrServer Host URL", "Endpoint for streaming torrent-based media files.", m_addonManager.getTorrServerHost(), false},
+        {2, "Hardware Decoding", "Uses GPU-accelerated video decoding context (recommended).", m_addonManager.getHwDecode() ? "ON (Enabled)" : "OFF (Disabled)", false},
+        {3, "Preferred Subtitle Language", "Default language code for media subtitle streams.", m_addonManager.getSubtitleLang(), false},
+        {4, "Show Memory Consumption", "Displays live RAM, cache, CPU, and data consumption HUD throughout app.", m_addonManager.getShowResourceMonitor() ? "ON (Enabled)" : "OFF (Disabled)", false}
     };
 
-    int itemY = panelY + 15;
-    for (int i = 0; i < (int)options.size(); ++i) {
+    if (m_addonManager.getShowResourceMonitor()) {
+        options.push_back({5, "  ↳ Show RAM Usage", "Toggle physical memory consumption in HUD.", m_addonManager.getShowRamUsage() ? "ON" : "OFF", true});
+        options.push_back({6, "  ↳ Show Cache Usage", "Toggle image, log, and catalog cache size in HUD.", m_addonManager.getShowCacheUsage() ? "ON" : "OFF", true});
+        options.push_back({7, "  ↳ Show CPU Usage", "Toggle processor usage indicator in HUD.", m_addonManager.getShowCpuUsage() ? "ON" : "OFF", true});
+        options.push_back({8, "  ↳ Show Data Usage", "Toggle cumulative network data transfer in HUD.", m_addonManager.getShowDataUsage() ? "ON" : "OFF", true});
+    }
+
+    options.push_back({9, "Clean Storage & Cache", m_cachedCacheSizeStr, "Press [A] to Manage", false});
+    options.push_back({10, "Back to Home", "Return to main screen.", "", false});
+
+    int maxVisible = 6;
+    int startIdx = 0;
+    if (m_settingsIndex >= maxVisible) {
+        startIdx = m_settingsIndex - maxVisible + 1;
+    }
+
+    int itemY = panelY + 12;
+    for (int i = startIdx; i < (int)options.size() && (itemY + 68) <= (panelY + panelH - 10); ++i) {
         bool sel = (i == m_settingsIndex);
+        int cardH = options[i].isSubItem ? 60 : 72;
+        int indentX = options[i].isSubItem ? 45 : 15;
+        int cardW = panelW - indentX - 15;
 
         if (sel) {
-            // Glowing border & frosted background for selected card
-            drawFilledRect(panelX + 15, itemY - 6, panelW - 30, 76, CARD_HL);
-            drawRect(panelX + 15, itemY - 6, panelW - 30, 76, ACCENT);
+            drawFilledRect(panelX + indentX, itemY - 4, cardW, cardH, CARD_HL);
+            drawRect(panelX + indentX, itemY - 4, cardW, cardH, ACCENT);
         } else {
-            drawFilledRect(panelX + 15, itemY - 6, panelW - 30, 76, CARD_COLOR);
-            drawRect(panelX + 15, itemY - 6, panelW - 30, 76, {255, 255, 255, 15});
+            drawFilledRect(panelX + indentX, itemY - 4, cardW, cardH, CARD_COLOR);
+            drawRect(panelX + indentX, itemY - 4, cardW, cardH, {255, 255, 255, 15});
         }
 
-        // Title and description
-        drawText(options[i].title, panelX + 35, itemY + 6, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
-        drawText(options[i].description, panelX + 35, itemY + 38, TEXT_SECONDARY, m_fontSmall);
+        drawText(options[i].title, panelX + indentX + 20, itemY + (options[i].isSubItem ? 6 : 8), sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+        drawText(options[i].description, panelX + indentX + 20, itemY + (options[i].isSubItem ? 32 : 40), TEXT_SECONDARY, m_fontSmall);
 
-        // Value on the right
         if (!options[i].value.empty()) {
             SDL_Color valColor = sel ? SDL_Color{255, 255, 255, 255} : SDL_Color{150, 180, 255, 255};
-            drawText(options[i].value, panelX + panelW - 400, itemY + 22, valColor, m_fontNormal);
+            drawText(options[i].value, panelX + panelW - 320, itemY + (options[i].isSubItem ? 16 : 22), valColor, m_fontNormal);
         }
 
-        itemY += 88;
+        itemY += cardH + 10;
     }
+
+    // ─── Interactive Clear Cache Modal ───
+    if (m_showClearCacheModal) {
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 190});
+
+        int modalW = 640, modalH = 430;
+        int modalX = (SCREEN_W - modalW) / 2;
+        int modalY = (SCREEN_H - modalH) / 2;
+
+        drawFilledRoundRect(modalX, modalY, modalW, modalH, 16, {20, 26, 38, 252});
+        drawRoundRect(modalX, modalY, modalW, modalH, 16, ACCENT);
+
+        drawText("Clean Storage & Cache", modalX + 35, modalY + 25, ACCENT, m_fontLarge);
+        drawText("Select what data you want to delete:", modalX + 35, modalY + 60, TEXT_SECONDARY, m_fontSmall);
+
+        auto formatBytes = [](uint64_t bytes) -> std::string {
+            char buf[64];
+            if (bytes >= 1024 * 1024) {
+                snprintf(buf, sizeof(buf), "%.1f MB", (double)bytes / (1024.0 * 1024.0));
+            } else if (bytes >= 1024) {
+                snprintf(buf, sizeof(buf), "%.1f KB", (double)bytes / 1024.0);
+            } else {
+                snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
+            }
+            return std::string(buf);
+        };
+
+        struct ClearItem {
+            std::string label;
+            bool checked;
+            uint64_t bytes;
+        };
+
+        std::vector<ClearItem> clearItems = {
+            {"Poster Images Cache", m_clearPosters, m_cachedImgBytes},
+            {"Application Debug Logs", m_clearLogs, m_cachedLogBytes},
+            {"Home Catalogs Cache", m_clearHomeCache, m_cachedHomeBytes},
+            {"Watch History & Bookmarks", m_clearHistory, m_cachedHistoryBytes}
+        };
+
+        int rowY = modalY + 95;
+        for (int i = 0; i < (int)clearItems.size(); ++i) {
+            bool isFocused = (m_clearCacheItemIndex == i);
+            int rowW = modalW - 70;
+            int rowH = 48;
+
+            if (isFocused) {
+                drawFilledRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, CARD_HL);
+                drawRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, ACCENT);
+            } else {
+                drawFilledRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, {28, 34, 48, 200});
+                drawRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, {50, 60, 80, 180});
+            }
+
+            // Checkbox box
+            int boxX = modalX + 50, boxY = rowY + 6, boxS = 22;
+            if (clearItems[i].checked) {
+                drawFilledRoundRect(boxX, boxY, boxS, boxS, 5, ACCENT);
+                drawTextCentered("X", boxX + boxS / 2, boxY + 2, {10, 14, 22, 255}, m_fontSmall);
+            } else {
+                drawRoundRect(boxX, boxY, boxS, boxS, 5, {120, 130, 150, 200});
+            }
+
+            drawText(clearItems[i].label, boxX + boxS + 16, rowY + 8, isFocused ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+            std::string sizeStr = formatBytes(clearItems[i].bytes);
+            drawText(sizeStr, modalX + modalW - 60 - (int)sizeStr.size() * 9, rowY + 8, {150, 220, 255, 255}, m_fontNormal);
+
+            rowY += 56;
+        }
+
+        // Action Buttons
+        int btn1W = 210, btnH = 38;
+        int btn1X = modalX + 50;
+        int btnY = modalY + modalH - 58;
+        drawFilledRoundRect(btn1X, btnY, btn1W, btnH, 8, {180, 45, 45, 220});
+        drawRoundRect(btn1X, btnY, btn1W, btnH, 8, {255, 90, 90, 255});
+        drawTextCentered("[X] Clean Selected", btn1X + btn1W / 2, btnY + 9, TEXT_PRIMARY, m_fontSmall);
+
+        int btn2W = 160;
+        int btn2X = modalX + modalW - 50 - btn2W;
+        drawFilledRoundRect(btn2X, btnY, btn2W, btnH, 8, {36, 44, 62, 220});
+        drawRoundRect(btn2X, btnY, btn2W, btnH, 8, {70, 84, 115, 255});
+        drawTextCentered("[B] Cancel", btn2X + btn2W / 2, btnY + 9, TEXT_SECONDARY, m_fontSmall);
+
+        drawTextCentered("[Up/Down] Navigate   [A] Toggle   [X] Clean   [B] Cancel",
+                         modalX + modalW / 2, modalY + modalH - 18, {120, 130, 150, 180}, m_fontSmall);
+    }
+}
+
+void App::updateCacheSizes() {
+    uint64_t imgBytes = 0;
+    uint64_t logBytes = 0;
+    uint64_t homeBytes = 0;
+    uint64_t histBytes = 0;
+
+    DIR* dir = opendir(CACHE_DIR);
+    if (dir) {
+        struct dirent* ent;
+        while ((ent = readdir(dir)) != nullptr) {
+            std::string name = ent->d_name;
+            if (name == "." || name == "..") continue;
+            std::string fullPath = std::string(CACHE_DIR) + "/" + name;
+            struct stat st;
+            if (stat(fullPath.c_str(), &st) == 0) {
+                imgBytes += st.st_size;
+            }
+        }
+        closedir(dir);
+    }
+
+    struct stat st;
+    if (stat(LOG_FILE, &st) == 0) logBytes = st.st_size;
+    if (stat(HOME_CACHE, &st) == 0) homeBytes = st.st_size;
+    if (stat(LIB_FILE, &st) == 0) histBytes = st.st_size;
+
+    m_cachedImgBytes = imgBytes;
+    m_cachedLogBytes = logBytes;
+    m_cachedHomeBytes = homeBytes;
+    m_cachedHistoryBytes = histBytes;
+    m_totalCacheBytes = imgBytes + logBytes + homeBytes + histBytes;
+
+    auto formatBytes = [](uint64_t bytes) -> std::string {
+        char buf[64];
+        if (bytes >= 1024 * 1024) {
+            snprintf(buf, sizeof(buf), "%.1f MB", (double)bytes / (1024.0 * 1024.0));
+        } else if (bytes >= 1024) {
+            snprintf(buf, sizeof(buf), "%.1f KB", (double)bytes / 1024.0);
+        } else {
+            snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
+        }
+        return std::string(buf);
+    };
+
+    m_cachedCacheSizeStr = "Posters: " + formatBytes(imgBytes) + "  •  Logs: " + formatBytes(logBytes) +
+                           "  •  Home: " + formatBytes(homeBytes) + "  (Total: " + formatBytes(m_totalCacheBytes) + ")";
+    m_lastCacheCalcTime = SDL_GetTicks();
+}
+
+void App::renderResourceHUD() {
+    if (!m_addonManager.getShowResourceMonitor()) return;
+
+    // In player screen, only render HUD when OSD or scrub is visible
+    if (m_screen == Screen::PLAYER && m_osdShowTime == 0 && !m_isScrubbing) {
+        return;
+    }
+
+    auto formatBytes = [](uint64_t bytes) -> std::string {
+        char buf[64];
+        if (bytes >= 1024 * 1024) {
+            snprintf(buf, sizeof(buf), "%.1f MB", (double)bytes / (1024.0 * 1024.0));
+        } else if (bytes >= 1024) {
+            snprintf(buf, sizeof(buf), "%.1f KB", (double)bytes / 1024.0);
+        } else {
+            snprintf(buf, sizeof(buf), "%llu B", (unsigned long long)bytes);
+        }
+        return std::string(buf);
+    };
+
+    std::vector<std::string> parts;
+
+    // 1. RAM Usage
+    if (m_addonManager.getShowRamUsage()) {
+        uint64_t usedRamMb = 0;
+#ifdef __SWITCH__
+        u64 usedMem = 0;
+        if (R_SUCCEEDED(svcGetInfo(&usedMem, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0))) {
+            usedRamMb = usedMem / (1024 * 1024);
+        }
+#else
+        struct rusage usage;
+        if (getrusage(RUSAGE_SELF, &usage) == 0) {
+            usedRamMb = usage.ru_maxrss / 1024;
+        }
+#endif
+        if (usedRamMb > 0) {
+            parts.push_back("RAM: " + std::to_string(usedRamMb) + " MB");
+        }
+    }
+
+    // 2. Cache Usage
+    if (m_addonManager.getShowCacheUsage()) {
+        if (SDL_GetTicks() - m_lastCacheCalcTime > 15000 || m_lastCacheCalcTime == 0) {
+            updateCacheSizes();
+        }
+        parts.push_back("Cache: " + formatBytes(m_totalCacheBytes));
+    }
+
+    // 3. CPU Usage
+    if (m_addonManager.getShowCpuUsage()) {
+        static uint32_t lastTicks = 0;
+        static int smoothedCpu = 12;
+        uint32_t now = SDL_GetTicks();
+        if (lastTicks > 0) {
+            uint32_t frameElapsed = now - lastTicks;
+            int instant = std::clamp((int)(frameElapsed * 100 / 17), 1, 99);
+            smoothedCpu = (smoothedCpu * 7 + instant) / 8;
+        }
+        lastTicks = now;
+        parts.push_back("CPU: " + std::to_string(smoothedCpu) + "%");
+    }
+
+    // 4. Data Usage
+    if (m_addonManager.getShowDataUsage()) {
+        uint64_t netBytes = g_totalNetworkBytes.load(std::memory_order_relaxed);
+        parts.push_back("Net: " + formatBytes(netBytes));
+    }
+
+    if (parts.empty()) return;
+
+    std::string hudStr;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (i > 0) hudStr += "  |  ";
+        hudStr += parts[i];
+    }
+
+    int hudW = (int)hudStr.size() * 7 + 24;
+    int hudH = 26;
+    int hudX = SCREEN_W - hudW - 135; // Positioned left of Exit button
+    int hudY = 21;
+
+    if (m_screen == Screen::PLAYER) {
+        hudX = SCREEN_W - hudW - 30;
+        hudY = 24;
+    }
+
+    drawFilledRoundRect(hudX, hudY, hudW, hudH, 13, {18, 24, 38, 235});
+    drawRoundRect(hudX, hudY, hudW, hudH, 13, {40, 160, 200, 140});
+    drawTextCentered(hudStr, hudX + hudW / 2, hudY + 4, {225, 240, 255, 255}, m_fontSmall);
 }
 
 void App::drawNavBar() {
@@ -4876,6 +5480,21 @@ void App::detailWorkerLoop() {
 
                 if (!firstEpId.empty()) {
                     auto rawStreams = m_addonManager.getAllStreams(type, firstEpId);
+                    if (firstEpId.rfind("tt", 0) != 0 && !loadedMeta.name.empty()) {
+                        std::string resolvedImdb = resolveImdbIdFromCinemeta(m_http, type, loadedMeta.name);
+                        if (!resolvedImdb.empty()) {
+                            int s = 1, e = 1;
+                            if (!sortedEps.empty()) {
+                                s = sortedEps[0].season > 0 ? sortedEps[0].season : 1;
+                                e = sortedEps[0].episode > 0 ? sortedEps[0].episode : 1;
+                            }
+                            std::string imdbEp = resolvedImdb + ":" + std::to_string(s) + ":" + std::to_string(e);
+                            auto imdbStreams = m_addonManager.getAllStreams(type, imdbEp);
+                            for (auto& sItem : imdbStreams) {
+                                rawStreams.push_back(std::move(sItem));
+                            }
+                        }
+                    }
                     std::vector<Stream> loadedStreams;
                     for (const auto& s : rawStreams) {
                         bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
@@ -4927,6 +5546,15 @@ void App::detailWorkerLoop() {
             }
 
             auto rawStreams = m_addonManager.getAllStreams(type, id);
+            if (id.rfind("tt", 0) != 0 && !loadedMeta.name.empty()) {
+                std::string resolvedImdb = resolveImdbIdFromCinemeta(m_http, type, loadedMeta.name);
+                if (!resolvedImdb.empty()) {
+                    auto imdbStreams = m_addonManager.getAllStreams(type, resolvedImdb);
+                    for (auto& sItem : imdbStreams) {
+                        rawStreams.push_back(std::move(sItem));
+                    }
+                }
+            }
             std::vector<Stream> loadedStreams;
             for (const auto& s : rawStreams) {
                 bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
@@ -4975,9 +5603,23 @@ void App::detailWorkerLoop() {
                 m_loadingStreams = false;
                 m_loadingDetail = false;
             }
-
         } else if (task == 2) { // Episode Streams
             auto rawStreams = m_addonManager.getAllStreams(type, id);
+            if (id.rfind("tt", 0) != 0 && !m_detailMeta.name.empty()) {
+                std::string resolvedImdb = resolveImdbIdFromCinemeta(m_http, type, m_detailMeta.name);
+                if (!resolvedImdb.empty()) {
+                    int s = 1, e = 1;
+                    if (!m_detailEpisodes.empty() && m_detailEpisodeIndex >= 0 && m_detailEpisodeIndex < (int)m_detailEpisodes.size()) {
+                        s = m_detailEpisodes[m_detailEpisodeIndex].season > 0 ? m_detailEpisodes[m_detailEpisodeIndex].season : 1;
+                        e = m_detailEpisodes[m_detailEpisodeIndex].episode > 0 ? m_detailEpisodes[m_detailEpisodeIndex].episode : 1;
+                    }
+                    std::string imdbEp = resolvedImdb + ":" + std::to_string(s) + ":" + std::to_string(e);
+                    auto imdbStreams = m_addonManager.getAllStreams(type, imdbEp);
+                    for (auto& sItem : imdbStreams) {
+                        rawStreams.push_back(std::move(sItem));
+                    }
+                }
+            }
             std::vector<Stream> loadedStreams;
             for (const auto& s : rawStreams) {
                 bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
@@ -5473,18 +6115,18 @@ void App::handleDrag(int dx, int dy) {
 
     case Screen::ADDONS: {
         m_dragAccumY += dy;
-        if (abs(m_dragAccumY) >= 20) {
-            int diff = -m_dragAccumY / 20;
-            if (!m_addonDiscoverPane) {
+        if (abs(m_dragAccumY) >= 30) {
+            int diff = -m_dragAccumY / 30;
+            if (m_addonTab == 0) {
                 auto addons = m_addonManager.getAddons();
                 if (!addons.empty()) {
                     int prev = m_addonIndex;
-                    m_addonIndex = std::clamp(m_addonIndex + diff, 0, (int)addons.size() - 1);
+                    m_addonIndex = std::clamp(m_addonIndex + diff * 3, 0, (int)addons.size() - 1);
                     printf("[Touch] Drag ADDON Index (Installed): %d -> %d\n", prev, m_addonIndex);
                 }
             } else {
                 int prev = m_addonDiscoverIndex;
-                m_addonDiscoverIndex = std::clamp(m_addonDiscoverIndex + diff, 0, (int)DISCOVER_ADDONS.size() - 1);
+                m_addonDiscoverIndex = std::clamp(m_addonDiscoverIndex + diff * 3, 0, (int)DISCOVER_ADDONS.size() - 1);
                 printf("[Touch] Drag ADDON Index (Discover): %d -> %d\n", prev, m_addonDiscoverIndex);
             }
             m_dragAccumY = 0;
@@ -5496,8 +6138,9 @@ void App::handleDrag(int dx, int dy) {
         m_dragAccumY += dy;
         if (abs(m_dragAccumY) >= 30) {
             int diff = -m_dragAccumY / 30;
+            int totalSettings = 7 + (m_addonManager.getShowResourceMonitor() ? 4 : 0);
             int prev = m_settingsIndex;
-            m_settingsIndex = std::clamp(m_settingsIndex + diff, 0, 5);
+            m_settingsIndex = std::clamp(m_settingsIndex + diff, 0, totalSettings - 1);
             m_dragAccumY = 0;
             printf("[Touch] Drag SETTINGS Index: %d -> %d\n", prev, m_settingsIndex);
         }
@@ -5627,30 +6270,44 @@ void App::handleLongPress(int x, int y) {
     }
 
     case Screen::ADDONS: {
-        if (x >= 40 && x <= 620 && y >= 80 && y <= 600) {
-            m_addonDiscoverPane = false;
-            auto addons = m_addonManager.getAddons();
-            if (addons.empty()) return;
+        auto addons = m_addonManager.getAddons();
+        int totalItems = (m_addonTab == 0) ? (int)addons.size() : (int)DISCOVER_ADDONS.size();
+        int curIndex = (m_addonTab == 0) ? m_addonIndex : m_addonDiscoverIndex;
+        int curRow = (totalItems > 0) ? (curIndex / 3) : 0;
+        int startRow = (curRow >= 2) ? curRow - 1 : 0;
+        int startIdx = startRow * 3;
+        int endIdx = std::min(totalItems, startIdx + 6);
 
-            int maxVisible = 7;
-            int startIndex = 0;
-            if (m_addonIndex >= maxVisible) {
-                startIndex = m_addonIndex - maxVisible + 1;
-            }
+        int cardW = 380, cardH = 240;
+        int startX = 40, startY = 114;
+        int gapX = 30, gapY = 16;
 
-            int itemY = 80 + 45;
-            for (int i = startIndex; i < (int)addons.size() && (itemY + 60) <= (80 + 520 - 20); i++) {
-                if (x >= 45 && x <= 615 && y >= itemY - 2 && y <= itemY + 54) {
-                    m_addonIndex = i;
+        for (int i = startIdx; i < endIdx; ++i) {
+            int rel = i - startIdx;
+            int r = rel / 3;
+            int c = rel % 3;
+            int cx = startX + c * (cardW + gapX);
+            int cy = startY + r * (cardH + gapY);
+
+            if (x >= cx && x <= cx + cardW && y >= cy && y <= cy + cardH) {
+                if (m_addonTab == 0 && i < (int)addons.size()) {
                     std::string addonId = addons[i].manifest.id;
-                    m_addonManager.removeAddon(addonId);
-                    m_addonManager.saveConfig(CONFIG_FILE);
-                    if (m_addonIndex > 0) m_addonIndex--;
-                    loadHomeCatalogs(true);
+                    std::string addonUrl = addons[i].transportUrl;
+                    m_loading = true;
+                    m_addonActionText = "Removing addon...";
+                    if (m_installThread.joinable()) m_installThread.join();
+                    m_installThread = std::thread([this, addonId, addonUrl]() {
+                        m_addonManager.removeAddon(addonId);
+                        m_addonManager.removeAddon(addonUrl);
+                        m_addonManager.saveConfig(CONFIG_FILE);
+                        if (m_addonIndex > 0) m_addonIndex--;
+                        loadHomeCatalogs(true);
+                        m_loading = false;
+                        m_addonActionText = "";
+                    });
                     printf("[Touch] LongPress ADDONS removed addon ID: %s\n", addonId.c_str());
                     return;
                 }
-                itemY += 60;
             }
         }
         break;

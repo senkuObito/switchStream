@@ -120,15 +120,36 @@ private:
 
 
     int m_libraryIndex = 0;
+    int m_addonTab = 0; // 0 = Installed, 1 = Discover
     int m_addonIndex = 0;
     bool m_addonDiscoverPane = false;
     int m_addonDiscoverIndex = 0;
+    std::string m_addonActionText;
     int m_settingsIndex = 0;
     std::atomic<bool> m_loading{false};
     std::atomic<bool> m_loadingStreams{false};
     std::mutex m_streamsMutex;
     std::atomic<bool> m_loadingHome{false};
     std::mutex m_homeMutex;
+
+    // Clear Cache modal dialog state
+    bool m_showClearCacheModal = false;
+    int m_clearCacheItemIndex = 0;
+    bool m_clearPosters = true;
+    bool m_clearLogs = true;
+    bool m_clearHomeCache = true;
+    bool m_clearHistory = false;
+
+    // Cache size tracking
+    uint32_t m_lastCacheCalcTime = 0;
+    std::string m_cachedCacheSizeStr = "Calculating...";
+    uint64_t m_cachedImgBytes = 0;
+    uint64_t m_cachedLogBytes = 0;
+    uint64_t m_cachedHomeBytes = 0;
+    uint64_t m_cachedHistoryBytes = 0;
+    uint64_t m_totalCacheBytes = 0;
+    void updateCacheSizes();
+    void renderResourceHUD();
 
     // Torrent streaming state
     std::string m_lastPlayingMagnet;
@@ -225,12 +246,14 @@ private:
     static constexpr const char* LIB_FILE    = "sdmc:/switch/switchstream/library.json";
     static constexpr const char* CACHE_DIR   = "sdmc:/switch/switchstream/imgcache";
     static constexpr const char* HOME_CACHE  = "sdmc:/switch/switchstream/home_cache.json";
+    static constexpr const char* LOG_FILE    = "sdmc:/switch/switchstream/log.txt";
 #else
     static constexpr const char* DATA_DIR    = "./switchstream_data/";
     static constexpr const char* CONFIG_FILE = "./switchstream_data/addons.json";
     static constexpr const char* LIB_FILE    = "./switchstream_data/library.json";
     static constexpr const char* CACHE_DIR   = "./switchstream_data/imgcache";
     static constexpr const char* HOME_CACHE  = "./switchstream_data/home_cache.json";
+    static constexpr const char* LOG_FILE    = "./switchstream_data/log.txt";
 #endif
 
     struct DownloadJob {

@@ -66,6 +66,22 @@ bool AddonManager::loadConfig(const std::string& configPath) {
         m_suppressStreamAddonWarning = false;
     }
 
+    if (doc.HasMember("show_resource_monitor") && doc["show_resource_monitor"].IsBool()) {
+        m_showResourceMonitor = doc["show_resource_monitor"].GetBool();
+    }
+    if (doc.HasMember("show_ram_usage") && doc["show_ram_usage"].IsBool()) {
+        m_showRamUsage = doc["show_ram_usage"].GetBool();
+    }
+    if (doc.HasMember("show_cache_usage") && doc["show_cache_usage"].IsBool()) {
+        m_showCacheUsage = doc["show_cache_usage"].GetBool();
+    }
+    if (doc.HasMember("show_cpu_usage") && doc["show_cpu_usage"].IsBool()) {
+        m_showCpuUsage = doc["show_cpu_usage"].GetBool();
+    }
+    if (doc.HasMember("show_data_usage") && doc["show_data_usage"].IsBool()) {
+        m_showDataUsage = doc["show_data_usage"].GetBool();
+    }
+
     if (doc.HasMember("addons") && doc["addons"].IsArray()) {
         for (auto& a : doc["addons"].GetArray()) {
             if (!a.IsObject() || !a.HasMember("url")) continue;
@@ -164,6 +180,21 @@ bool AddonManager::saveConfig(const std::string& configPath) const {
 
     writer.Key("suppress_stream_warning");
     writer.Bool(m_suppressStreamAddonWarning);
+
+    writer.Key("show_resource_monitor");
+    writer.Bool(m_showResourceMonitor);
+
+    writer.Key("show_ram_usage");
+    writer.Bool(m_showRamUsage);
+
+    writer.Key("show_cache_usage");
+    writer.Bool(m_showCacheUsage);
+
+    writer.Key("show_cpu_usage");
+    writer.Bool(m_showCpuUsage);
+
+    writer.Key("show_data_usage");
+    writer.Bool(m_showDataUsage);
 
     writer.Key("addons");
     writer.StartArray();
@@ -400,6 +431,30 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
 
         return true;
     }
+
+    // Fallback if manifest resources were not yet fetched or empty:
+    if (addon.manifest.resources.empty()) {
+        std::string low = addon.transportUrl + " " + addon.manifest.id;
+        for (char& c : low) c = (char)tolower((unsigned char)c);
+        if (resource == "stream") {
+            if (low.find("torrent") != std::string::npos ||
+                low.find("stream") != std::string::npos ||
+                low.find("filtorrent") != std::string::npos ||
+                low.find("dramayo") != std::string::npos ||
+                low.find("inmax") != std::string::npos ||
+                low.find("thepiratebay") != std::string::npos ||
+                low.find("torrentsdb") != std::string::npos) {
+                return true;
+            }
+        } else if (resource == "catalog") {
+            if (low.find("catalog") != std::string::npos ||
+                low.find("cinemeta") != std::string::npos ||
+                low.find("kdramacrush") != std::string::npos) {
+                return true;
+            }
+        }
+    }
+
     return false;
 }
 
@@ -550,10 +605,11 @@ std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
     futures.reserve(localAddons.size());
 
     for (auto addon : localAddons) {
-        if (!addonHandles(addon, "stream", type, videoId)) continue;
+        if (!addon.enabled) continue;
         futures.push_back(std::async(std::launch::async,
             [this, addon, type, videoId]() mutable -> StreamVec {
                 ensureManifest(addon);
+                if (!addonHandles(addon, "stream", type, videoId)) return {};
                 StreamVec streams;
                 StreamResponse resp;
                 if (m_client.fetchStreams(addon.manifest, type, videoId, resp)) {
