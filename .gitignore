@@ -20,3 +20,5 @@ torrserver
 .DS_Store
 .vscode/
 .idea/
+scratch/
+*.zip

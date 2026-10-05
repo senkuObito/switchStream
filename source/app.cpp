@@ -14,6 +14,7 @@
 #ifdef __SWITCH__
 #include <switch.h>
 #endif
+#include "torrent/torrent_stream.h"
 
 // Switch screen: 1280x720
 static constexpr int SCREEN_W = 1280;
@@ -43,7 +44,8 @@ struct DiscoverAddon {
 static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     // --- Catalog Addons (provide home page content + search) ---
     {"Cinemeta", "The official addon for movie and series catalogs & search.", "https://v3-cinemeta.strem.io/manifest.json"},
-    {"Anime Kitsu", "Kitsu.io Anime catalog and metadata.", "https://anime-kitsu.strem.fun/manifest.json"},
+    {"yastream", "Stream Asian dramas, series and movies directly with multiple providers.", "https://yastream.tamthai.de/manifest.json"},
+    {"K-Drama Crush", "Asian and Korean drama catalog (drama feeds).", "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json"},
     {"IndiaStreams", "Trending movies and shows from Indian platforms (Tamil, Hindi, etc.).", "https://indiastreams.rdata.in/manifest.json"},
     {"Indian Regional Catalog", "Indian regional movies catalog by language (Tamil, Telugu, Hindi).", "https://83e20802dcf1-indian-streams.baby-beamup.club/manifest.json"},
     {"Streaming Catalogs", "Catalogs from Netflix, Disney+, HBO, Prime, etc.", "https://7a82163c306e-streaming-catalogs.baby-beamup.club/manifest.json"},
@@ -52,7 +54,6 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
 
     // --- Stream Addons (provide playable stream links) ---
     {"Torrentio", "Torrent streams from YTS, RARBG, 1337x, etc.", "https://torrentio.strem.fun/manifest.json"},
-    {"Pengu", "Multi-source scraping stream addon (configured for 1080p/720p/480p).", "https://pengu.uk/%7B%22source_111477%22%3A%22on%22%2C%22source_4khdhub%22%3A%22on%22%2C%22source_cinefreak%22%3A%22on%22%2C%22source_aniwaves%22%3A%22on%22%2C%22source_moviebox%22%3A%22on%22%2C%22source_moviesdrives%22%3A%22on%22%2C%22source_allmovieland%22%3A%22on%22%2C%22source_overflix%22%3A%22on%22%2C%22source_vaplayer%22%3A%22on%22%2C%22source_vidking%22%3A%22on%22%2C%22source_animesuge%22%3A%22on%22%2C%22source_aether%22%3A%22on%22%2C%22source_vidlink%22%3A%22on%22%2C%22source_hdghartv%22%3A%22on%22%2C%22source_scloud%22%3A%22on%22%2C%22res_2160%22%3A%22on%22%2C%22res_1080%22%3A%22on%22%2C%22res_720%22%3A%22on%22%2C%22res_480%22%3A%22on%22%2C%22disable_direct%22%3A%22on%22%7D/manifest.json"},
     {"Flix Streams", "HTTP streams from multiple sources.", "https://flixnest.app/flix-streams/manifest.json"},
     {"Nebula Streams", "HTTP streams from multiple sources.", "https://nebulastreams.onrender.com/manifest.json"},
     {"MovieBox", "HTTP streams for movies and series.", "https://moviebox-cfa7.onrender.com/manifest.json"},
@@ -68,6 +69,28 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
 };
 
 namespace ss {
+
+static bool isFourKOrHigher(const Stream& s) {
+    std::string hay = s.name + " " + s.title;
+    for (char& c : hay) c = (char)tolower((unsigned char)c);
+
+    if (hay.find("2160") != std::string::npos ||
+        hay.find("uhd") != std::string::npos ||
+        hay.find("4320") != std::string::npos ||
+        hay.find("8k") != std::string::npos) {
+        return true;
+    }
+
+    size_t pos = 0;
+    while ((pos = hay.find("4k", pos)) != std::string::npos) {
+        bool leftOk = (pos == 0 || !isalnum((unsigned char)hay[pos - 1]));
+        bool rightOk = (pos + 2 >= hay.size() || !isalnum((unsigned char)hay[pos + 2]));
+        if (leftOk && rightOk) return true;
+        pos += 2;
+    }
+
+    return false;
+}
 
 App::App()
     : m_addonClient(m_http)
@@ -157,17 +180,39 @@ bool App::init() {
             "https://v3-cinemeta.strem.io/manifest.json",
             "https://torrentio.strem.fun/manifest.json",
             "https://cyberflix.elfhosted.com/manifest.json",
-            "https://pengu.uk/manifest.json",
+            "https://yastream.tamthai.de/manifest.json",
+            "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
             "https://free.flixnest.app/manifest.json",
             "https://opensubtitles-v3.strem.io/manifest.json",
             "https://watchhub.strem.io/manifest.json",
-            "https://anime-kitsu.strem.fun/manifest.json",
             "https://badboysxs-morpheus.hf.space/manifest.json",
             "https://stremio.yukistreams.xyz/manifest.json",
             "https://sword-watch.vercel.app/manifest.json",
             "https://nagare.nexioapp.org/manifest.json"
         };
         bool updatedAddons = false;
+
+        // Automatically uninstall deprecated/removed addons (Pengu, Anime Kitsu, AIOStreams)
+        for (const auto& a : m_addonManager.getAddons()) {
+            std::string tUrl = a.transportUrl;
+            std::string aName = a.manifest.name;
+            std::string aId = a.manifest.id;
+            for (char& c : tUrl) c = (char)tolower((unsigned char)c);
+            for (char& c : aName) c = (char)tolower((unsigned char)c);
+            for (char& c : aId) c = (char)tolower((unsigned char)c);
+
+            bool isPengu = (tUrl.find("pengu") != std::string::npos || aName.find("pengu") != std::string::npos || aId.find("pengu") != std::string::npos);
+            bool isKitsu = (tUrl.find("anime-kitsu") != std::string::npos || aName.find("kitsu") != std::string::npos || aId.find("kitsu") != std::string::npos);
+            bool isAio = (tUrl.find("aiostream") != std::string::npos || aName.find("aiostream") != std::string::npos || aId.find("aiostream") != std::string::npos);
+
+            if (isPengu || isKitsu || isAio) {
+                printf("[App] Removing deprecated addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
+                m_addonManager.removeAddon(a.transportUrl);
+                m_addonManager.removeAddon(a.manifest.id);
+                updatedAddons = true;
+            }
+        }
+
         auto currentAddons = m_addonManager.getAddons();
         for (const auto& url : defaultAddons) {
             bool found = false;
@@ -230,8 +275,26 @@ void App::run() {
     while (m_running) {
         m_player.update();
 
-        // If playing and finished, go back to detail screen
-        if (m_screen == Screen::PLAYER && m_player.isFinished()) {
+        // Check if pending torrent playback is ready to start via mpv on the main thread
+        bool shouldPlayTorrent = false;
+        std::string torrentHeaders;
+        {
+            std::lock_guard<std::mutex> lock(m_torrentMutex);
+            if (m_pendingTorrentPlay) {
+                m_pendingTorrentPlay = false;
+                shouldPlayTorrent = true;
+                torrentHeaders = m_pendingTorrentHeaders;
+            }
+        }
+        if (shouldPlayTorrent) {
+            printf("[App] Starting mpv playback on main thread!\n");
+            m_player.play("torrent://stream", torrentHeaders);
+        }
+
+        // If playing and finished (EOF reached after actual playback), go back to detail screen
+        if (m_screen == Screen::PLAYER && m_player.isFinished() && !TorrentStream::instance().isOpening() && !m_torrentBuffering) {
+            printf("[App] Playback reached EOF, returning to detail screen\n");
+            m_player.stop();
             m_screen = Screen::DETAIL;
         }
 
@@ -762,7 +825,6 @@ void App::handleInputForPad(u64 kDown) {
 
     case Screen::PLAYER: {
         uint32_t now = SDL_GetTicks();
-        bool isOsdVisible = (now - m_osdShowTime < 4000);
 
         if (kDown) {
             if (m_showSubList) {
@@ -830,43 +892,48 @@ void App::handleInputForPad(u64 kDown) {
                 break;
             }
 
-            if (!isOsdVisible) {
-                // If controls are hidden, B exits immediately.
-                // Any other button press wakes up the controls.
-                if (kDown & HidNpadButton_B) {
-                    {
-                        std::lock_guard<std::mutex> lock(m_torrentMutex);
-                        m_torrentPollingActive = false;
-                    }
-                    if (m_torrentPollingThread.joinable()) {
-                        m_torrentPollingThread.join();
-                    }
-                    m_player.stop();
-                    m_screen = Screen::DETAIL;
-                } else {
+            if (kDown & HidNpadButton_B) {
+                // If a popup overlay menu is open, B closes that menu
+                if (m_showSubList || m_showAudioList || m_showQualityList) {
+                    m_showSubList = false;
+                    m_showAudioList = false;
+                    m_showQualityList = false;
                     m_osdShowTime = now;
+                    break;
                 }
-            } else {
-                // Controls are visible. B hides the controls, any other action is processed.
-                m_osdShowTime = now;
-                if (kDown & HidNpadButton_B) {
-                    m_osdShowTime = now - 4000; // hide OSD
+                // Otherwise B exits the player immediately back to DETAIL
+                printf("[App] B button pressed: stopping playback and returning to DETAIL\n");
+                m_torrentBuffering = false;
+                m_lastPlayingMagnet.clear();
+                {
+                    std::lock_guard<std::mutex> lock(m_torrentMutex);
+                    m_torrentPollingActive = false;
+                    m_pendingTorrentPlay = false;
                 }
-                else if (kDown & HidNpadButton_A) {
-                    m_player.togglePlay();
+                if (m_torrentPollingThread.joinable()) {
+                    m_torrentPollingThread.join();
                 }
-                else if (kDown & HidNpadButton_Right) {
-                    m_player.seek(10.0);
-                }
-                else if (kDown & HidNpadButton_Left) {
-                    m_player.seek(-10.0);
-                }
-                else if (kDown & HidNpadButton_Up) {
-                    m_player.changeVolume(5.0);
-                }
-                else if (kDown & HidNpadButton_Down) {
-                    m_player.changeVolume(-5.0);
-                }
+                m_player.stop();
+                m_screen = Screen::DETAIL;
+                break;
+            }
+
+            m_osdShowTime = now;
+            if (kDown & HidNpadButton_A) {
+                m_player.togglePlay();
+            }
+            else if (kDown & HidNpadButton_Right) {
+                m_player.seek(10.0);
+            }
+            else if (kDown & HidNpadButton_Left) {
+                m_player.seek(-10.0);
+            }
+            else if (kDown & HidNpadButton_Up) {
+                m_player.changeVolume(5.0);
+            }
+            else if (kDown & HidNpadButton_Down) {
+                m_player.changeVolume(-5.0);
+            }
                 else if (kDown & HidNpadButton_Y) {
                     m_showSubList = true;
                     m_subListIndex = 0;
@@ -894,7 +961,6 @@ void App::handleInputForPad(u64 kDown) {
                     m_showQualityList = true;
                     m_qualityListIndex = m_detailStreamIndex;
                 }
-            }
         }
         break;
     }
@@ -950,11 +1016,11 @@ void App::handleInputForPad(u64 kDown) {
                         "https://v3-cinemeta.strem.io/manifest.json",
                         "https://torrentio.strem.fun/manifest.json",
                         "https://cyberflix.elfhosted.com/manifest.json",
-                        "https://pengu.uk/manifest.json",
+                        "https://yastream.tamthai.de/manifest.json",
+                        "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
                         "https://free.flixnest.app/manifest.json",
                         "https://opensubtitles-v3.strem.io/manifest.json",
                         "https://watchhub.strem.io/manifest.json",
-                        "https://anime-kitsu.strem.fun/manifest.json",
                         "https://badboysxs-morpheus.hf.space/manifest.json",
                         "https://stremio.yukistreams.xyz/manifest.json",
                         "https://sword-watch.vercel.app/manifest.json",
@@ -1402,11 +1468,11 @@ void App::handleTouch(int x, int y) {
                             "https://v3-cinemeta.strem.io/manifest.json",
                             "https://torrentio.strem.fun/manifest.json",
                             "https://cyberflix.elfhosted.com/manifest.json",
-                            "https://pengu.uk/manifest.json",
+                            "https://yastream.tamthai.de/manifest.json",
+                            "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
                             "https://free.flixnest.app/manifest.json",
                             "https://opensubtitles-v3.strem.io/manifest.json",
                             "https://watchhub.strem.io/manifest.json",
-                            "https://anime-kitsu.strem.fun/manifest.json",
                             "https://badboysxs-morpheus.hf.space/manifest.json",
                             "https://stremio.yukistreams.xyz/manifest.json",
                             "https://sword-watch.vercel.app/manifest.json",
@@ -1431,17 +1497,21 @@ void App::handleTouch(int x, int y) {
 
     case Screen::PLAYER: {
         double pos = m_player.getPosition();
-        if (pos <= 0.01) {
+        if (pos <= 0.01 || m_torrentBuffering) {
             // Loading screen: back button touch handler
-            int cardY = SCREEN_H/2 - 160;
+            int cardY = SCREEN_H/2 - 170;
+            int cardH = 340;
             int btnW = 240;
-            int btnH = 34;
+            int btnH = 36;
             int btnX = SCREEN_W/2 - btnW/2;
-            int btnY = cardY + 250;
+            int btnY = cardY + cardH - 55;
             if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
+                m_torrentBuffering = false;
+                m_lastPlayingMagnet.clear();
                 {
                     std::lock_guard<std::mutex> lock(m_torrentMutex);
                     m_torrentPollingActive = false;
+                    m_pendingTorrentPlay = false;
                 }
                 if (m_torrentPollingThread.joinable()) {
                     m_torrentPollingThread.join();
@@ -1553,6 +1623,28 @@ void App::handleTouch(int x, int y) {
             return;
         }
 
+        // Check if user tapped Cancel / Back during loading or buffering
+        if (m_player.getPosition() <= 0.01 || m_torrentBuffering) {
+            int cardY = SCREEN_H/2 - 170;
+            int cardH = 340;
+            int btnW = 240;
+            int btnH = 36;
+            int btnX = SCREEN_W/2 - btnW/2;
+            int btnY = cardY + cardH - 55;
+            if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
+                printf("[Touch] Cancel / Back tapped during stream loading\n");
+                m_torrentBuffering = false;
+                m_lastPlayingMagnet.clear();
+                {
+                    std::lock_guard<std::mutex> lock(m_torrentMutex);
+                    m_torrentPollingActive = false;
+                }
+                m_player.stop();
+                m_screen = Screen::DETAIL;
+                return;
+            }
+        }
+
         // 2. Check Double Tap
         if (now - m_lastTapTime < 350) {
             // Double tap detected!
@@ -1622,15 +1714,15 @@ void App::handleTouch(int x, int y) {
 
         if (y >= ctrlY && y <= ctrlY + 30) {
             if (x >= backX && x <= backX + btnBackW) {
+                m_torrentBuffering = false;
+                m_lastPlayingMagnet.clear();
                 {
                     std::lock_guard<std::mutex> lock(m_torrentMutex);
                     m_torrentPollingActive = false;
                 }
-                if (m_torrentPollingThread.joinable()) {
-                    m_torrentPollingThread.join();
-                }
                 m_player.stop();
                 m_screen = Screen::DETAIL;
+                return;
             }
             else if (x >= seekLX && x <= seekLX + btnSeekLW) {
                 m_player.seek(-10.0);
@@ -1735,7 +1827,23 @@ static std::string formatTime(double seconds) {
 
 void App::renderPlayer() {
     double pos = m_player.getPosition();
-    if (pos <= 0.01) {
+    bool isNativeTorrent = TorrentStream::instance().isActive() || TorrentStream::instance().isOpening() || !m_lastPlayingMagnet.empty();
+
+    // Check if torrent prebuffering is complete
+    if (isNativeTorrent && m_torrentBuffering) {
+        double cacheSecs = m_player.getCacheDuration();
+        bool cacheIdle = m_player.isCacheIdle();
+        // Buffer at least 5.0 seconds before starting playback (smooth playback guarantee)
+        if (cacheSecs >= 5.0 || (cacheIdle && cacheSecs > 0.5)) {
+            printf("[App] Torrent pre-buffering complete (%.1f s in cache), starting playback!\n", cacheSecs);
+            m_player.resume();
+            m_torrentBuffering = false;
+        }
+    }
+
+    bool showLoading = (pos <= 0.01) || m_torrentBuffering;
+
+    if (showLoading) {
         // Keep the render context active to prevent libmpv warning/hang
         m_player.render(SCREEN_W, SCREEN_H);
         SDL_RenderFlush(m_renderer);
@@ -1743,84 +1851,81 @@ void App::renderPlayer() {
         SDL_SetRenderDrawColor(m_renderer, 10, 10, 15, 255);
         SDL_RenderClear(m_renderer);
 
-        std::string statStr;
-        int peers = 0;
-        double speed = 0.0;
-        int percent = -1;
-        bool isTorrent = false;
-
-        {
-            std::lock_guard<std::mutex> lock(m_torrentMutex);
-            isTorrent = !m_lastPlayingMagnet.empty();
-            statStr = m_torrentStatString;
-            peers = m_torrentPeers;
-            speed = m_torrentSpeed;
-            percent = m_torrentPreloadPercent;
-        }
-
         // Center card coordinates
-        int cardX = SCREEN_W/2 - 300;
-        int cardY = SCREEN_H/2 - 160;
-        int cardW = 600;
-        int cardH = 320;
+        int cardX = SCREEN_W/2 - 320;
+        int cardY = SCREEN_H/2 - 170;
+        int cardW = 640;
+        int cardH = 340;
 
         // Glassmorphic card body
-        drawFilledRoundRect(cardX, cardY, cardW, cardH, 12, {0, 0, 0, 230});
-        
-        // Specular glass borders
-        drawRoundRect(cardX, cardY, cardW, cardH, 12, {255, 255, 255, 35});
+        drawFilledRoundRect(cardX, cardY, cardW, cardH, 14, {15, 18, 25, 240});
+        drawRoundRect(cardX, cardY, cardW, cardH, 14, {255, 255, 255, 35});
 
-        if (isTorrent) {
-            drawSpinner(SCREEN_W/2, cardY + 45, 20);
-            drawTextCentered("Loading torrent video...", SCREEN_W/2, cardY + 75, TEXT_PRIMARY, m_fontLarge);
-            
-            std::string msg = "Status: " + statStr;
-            if (percent >= 0) {
-                msg += " (" + std::to_string(percent) + "%)";
-            }
-            drawTextCentered(msg, SCREEN_W/2, cardY + 110, {100, 180, 255, 255}, m_fontNormal);
+        if (isNativeTorrent) {
+            auto stats = TorrentStream::instance().getStats();
+            drawSpinner(SCREEN_W/2, cardY + 45, 22);
 
-            std::string speedStr;
-            if (speed >= 1024 * 1024) {
-                char buf[32];
-                snprintf(buf, sizeof(buf), "%.2f MB/s", speed / (1024.0 * 1024.0));
-                speedStr = buf;
-            } else if (speed >= 1024) {
-                char buf[32];
-                snprintf(buf, sizeof(buf), "%.1f KB/s", speed / 1024.0);
-                speedStr = buf;
+            std::string headerTitle = stats.name.empty() ? "Streaming BitTorrent" : stats.name;
+            if (headerTitle.size() > 42) headerTitle = headerTitle.substr(0, 39) + "...";
+            drawTextCentered(headerTitle, SCREEN_W/2, cardY + 80, TEXT_PRIMARY, m_fontLarge);
+
+            // Progress bar
+            int barW = cardW - 80;
+            int barH = 10;
+            int barX = cardX + 40;
+            int barY = cardY + 120;
+
+            double pct = 0.0;
+            std::string statDesc;
+            if (TorrentStream::instance().isOpening()) {
+                statDesc = stats.statusStr;
             } else {
-                speedStr = std::to_string((int)speed) + " B/s";
+                double cacheSecs = m_player.getCacheDuration();
+                pct = (cacheSecs / 5.0) * 100.0;
+                if (pct > 100.0) pct = 100.0;
+                if (pct < 0.0) pct = 0.0;
+                char b[128];
+                snprintf(b, sizeof(b), "Buffering: %.1f s / 5.0 s (%.0f%%)", cacheSecs, pct);
+                statDesc = b;
             }
-            
-            std::string peerInfo = "Peers: " + std::to_string(peers) + "  |  Speed: " + speedStr;
-            drawTextCentered(peerInfo, SCREEN_W/2, cardY + 138, TEXT_SECONDARY, m_fontSmall);
 
-            // Add helpful warnings for independent execution
-            std::string host = m_addonManager.getTorrServerHost();
-            if (host.find("127.0.0.1") != std::string::npos || host.find("localhost") != std::string::npos) {
-                drawTextCentered("Warning: Local TorrServer cannot run directly on Switch.", SCREEN_W/2, cardY + 175, {255, 140, 140, 255}, m_fontSmall);
-                drawTextCentered("Please configure a remote PC's TorrServer IP in Settings,", SCREEN_W/2, cardY + 195, {255, 180, 140, 255}, m_fontSmall);
-                drawTextCentered("or configure a Debrid service in your addon to stream directly.", SCREEN_W/2, cardY + 215, {255, 200, 140, 255}, m_fontSmall);
-            } else if (statStr.find("offline") != std::string::npos || statStr.find("unreachable") != std::string::npos) {
-                drawTextCentered("Error: Cannot connect to remote TorrServer.", SCREEN_W/2, cardY + 175, {255, 140, 140, 255}, m_fontSmall);
-                drawTextCentered("Host URL: " + host, SCREEN_W/2, cardY + 195, {150, 200, 255, 255}, m_fontSmall);
-                drawTextCentered("Tip: Configure a Debrid service to stream serverless.", SCREEN_W/2, cardY + 215, {150, 255, 150, 255}, m_fontSmall);
+            drawTextCentered(statDesc, SCREEN_W/2, cardY + 145, {100, 190, 255, 255}, m_fontNormal);
+
+            // Draw progress bar track & fill
+            drawFilledRoundRect(barX, barY, barW, barH, 5, {255, 255, 255, 30});
+            if (pct > 0.0) {
+                int fillW = (int)((barW * pct) / 100.0);
+                if (fillW < 8) fillW = 8;
+                drawFilledRoundRect(barX, barY, fillW, barH, 5, ACCENT);
+            }
+
+            // Peer info & download speed
+            char peerBuf[128];
+            snprintf(peerBuf, sizeof(peerBuf), "Peers: %d (peak: %d)  |  Speed: %.2f MB/s",
+                     stats.livePeers, stats.peakPeers, stats.speedMBps);
+            drawTextCentered(peerBuf, SCREEN_W/2, cardY + 180, TEXT_SECONDARY, m_fontSmall);
+
+            if (stats.piecesTotal > 0) {
+                char pieceBuf[128];
+                snprintf(pieceBuf, sizeof(pieceBuf), "Pieces: %lld / %lld  |  Total: %.1f MB",
+                         (long long)stats.piecesDone, (long long)stats.piecesTotal,
+                         stats.totalBytes / (1024.0 * 1024.0));
+                drawTextCentered(pieceBuf, SCREEN_W/2, cardY + 210, {160, 175, 195, 255}, m_fontSmall);
             }
         } else {
             drawSpinner(SCREEN_W/2, cardY + 80, 28);
             drawTextCentered("Loading video stream...", SCREEN_W/2, cardY + 140, TEXT_PRIMARY, m_fontLarge);
         }
 
-        // Action button pill
+        // Action button pill: [B] Cancel / Back
         int btnW = 240;
-        int btnH = 34;
+        int btnH = 36;
         int btnX = SCREEN_W/2 - btnW/2;
-        int btnY = cardY + 250;
-        
+        int btnY = cardY + cardH - 55;
+
         drawFilledRoundRect(btnX, btnY, btnW, btnH, 8, {255, 255, 255, 20});
         drawRoundRect(btnX, btnY, btnW, btnH, 8, {255, 255, 255, 45});
-        drawTextCentered("[B] Back to Details", SCREEN_W/2, btnY + 7, {255, 120, 120, 255}, m_fontSmall);
+        drawTextCentered("[B] Cancel / Back", SCREEN_W/2, btnY + 8, {255, 120, 120, 255}, m_fontSmall);
 
         SDL_RenderPresent(m_renderer);
     } else {
@@ -1851,6 +1956,13 @@ void App::renderPlayer() {
 
             std::string timeStr = formatTime(displayPos) + " / " + formatTime(duration);
             drawText(timeStr, SCREEN_W - 200, 15, {180, 200, 220, 255}, m_fontSmall);
+
+            if (TorrentStream::instance().isActive()) {
+                auto tstats = TorrentStream::instance().getStats();
+                char pbuf[64];
+                snprintf(pbuf, sizeof(pbuf), "%d peers | %.2f MB/s", tstats.livePeers, tstats.speedMBps);
+                drawText(pbuf, SCREEN_W - 420, 15, {100, 200, 255, 255}, m_fontSmall);
+            }
 
             // ─── Bottom Control Panel (glassmorphic floating) ───
             int panelW = 1000;
@@ -2639,7 +2751,7 @@ void App::renderSettings() {
     };
 
     std::vector<SettingOption> options = {
-        {"Enable Torrent Streams", "Display and stream torrent/magnet links (requires remote TorrServer).", m_addonManager.getEnableTorrents() ? "ON (Enabled)" : "OFF (Disabled)"},
+        {"Enable Torrent Streams", "Native on-device BitTorrent streaming using RAM circular buffer.", m_addonManager.getEnableTorrents() ? "ON (Enabled)" : "OFF (Disabled)"},
         {"TorrServer Host URL", "Endpoint for streaming torrent-based media files.", m_addonManager.getTorrServerHost()},
         {"Hardware Decoding", "Uses GPU-accelerated video decoding context (recommended).", m_addonManager.getHwDecode() ? "ON (Enabled)" : "OFF (Disabled)"},
         {"Preferred Subtitle Language", "Default language code for media subtitle streams.", m_addonManager.getSubtitleLang()},
@@ -3104,11 +3216,26 @@ void App::detailWorkerLoop() {
                 bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
                 if (isTorrentStream) {
                     if (!m_addonManager.getEnableTorrents()) continue;
+                    if (isFourKOrHigher(s)) {
+                        printf("[Streams] Skipping 4K/UHD torrent stream: %s (%s)\n", s.name.c_str(), s.title.c_str());
+                        continue;
+                    }
+                    static const std::string DEFAULT_MAGNET_TRACKERS =
+                        "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
+                        "&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce"
+                        "&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce"
+                        "&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce"
+                        "&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce";
+
                     if (!s.url.empty()) {
-                        loadedStreams.push_back(s);
+                        Stream conv = s;
+                        if (conv.url.rfind("magnet:", 0) == 0 && conv.url.find("opentrackr.org") == std::string::npos) {
+                            conv.url += DEFAULT_MAGNET_TRACKERS;
+                        }
+                        loadedStreams.push_back(conv);
                     } else if (!s.infoHash.empty()) {
                         Stream conv = s;
-                        conv.url = "magnet:?xt=urn:btih:" + s.infoHash;
+                        conv.url = "magnet:?xt=urn:btih:" + s.infoHash + DEFAULT_MAGNET_TRACKERS;
                         loadedStreams.push_back(conv);
                     }
                 } else {
@@ -3140,11 +3267,26 @@ void App::detailWorkerLoop() {
                 bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
                 if (isTorrentStream) {
                     if (!m_addonManager.getEnableTorrents()) continue;
+                    if (isFourKOrHigher(s)) {
+                        printf("[Streams] Skipping 4K/UHD torrent stream: %s (%s)\n", s.name.c_str(), s.title.c_str());
+                        continue;
+                    }
+                    static const std::string DEFAULT_MAGNET_TRACKERS =
+                        "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
+                        "&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce"
+                        "&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce"
+                        "&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce"
+                        "&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce";
+
                     if (!s.url.empty()) {
-                        loadedStreams.push_back(s);
+                        Stream modified = s;
+                        if (modified.url.rfind("magnet:", 0) == 0 && modified.url.find("opentrackr.org") == std::string::npos) {
+                            modified.url += DEFAULT_MAGNET_TRACKERS;
+                        }
+                        loadedStreams.push_back(modified);
                     } else if (!s.infoHash.empty()) {
                         Stream modified = s;
-                        modified.url = m_addonManager.getTorrServerHost() + "/stream?link=" + s.infoHash + "&index=" + std::to_string(s.fileIdx > -1 ? s.fileIdx : 1) + "&play";
+                        modified.url = "magnet:?xt=urn:btih:" + s.infoHash + DEFAULT_MAGNET_TRACKERS;
                         loadedStreams.push_back(modified);
                     }
                 } else {
@@ -3195,7 +3337,7 @@ void App::startTorrentPolling() {
         std::lock_guard<std::mutex> lock(m_torrentMutex);
         if (m_torrentPollingActive) return;
         m_torrentPollingActive = true;
-        m_torrentStatString = "Connecting...";
+        m_torrentStatString = "Connecting to peers...";
         m_torrentPeers = 0;
         m_torrentSpeed = 0.0;
         m_torrentPreloadPercent = -1;
@@ -3206,19 +3348,17 @@ void App::startTorrentPolling() {
     }
 
     m_torrentPollingThread = std::thread([this]() {
-        printf("TorrServer stats polling thread started.\n");
+        printf("[App] Native Torrent stats polling thread started.\n");
         while (true) {
-            if (m_shuttingDown) break; // exit immediately if app is closing
+            if (m_shuttingDown) break;
 
-            std::string magnet;
             bool active = false;
             {
                 std::lock_guard<std::mutex> lock(m_torrentMutex);
-                magnet = m_lastPlayingMagnet;
                 active = m_torrentPollingActive;
             }
 
-            if (!active || m_screen != Screen::PLAYER || magnet.empty()) {
+            if (!active || m_screen != Screen::PLAYER) {
                 break;
             }
 
@@ -3226,72 +3366,19 @@ void App::startTorrentPolling() {
                 break;
             }
 
-            std::string encoded;
-            for (char c : magnet) {
-                if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') {
-                    encoded += c;
-                } else {
-                    char hex[4];
-                    snprintf(hex, sizeof(hex), "%%%02X", (unsigned char)c);
-                    encoded += hex;
+            if (TorrentStream::instance().isActive()) {
+                auto stats = TorrentStream::instance().getStats();
+                int pct = -1;
+                if (stats.piecesTotal > 0) {
+                    pct = (int)((stats.piecesDone * 100) / stats.piecesTotal);
                 }
-            }
-
-            std::string url = m_addonManager.getTorrServerHost() + "/stream?link=" + encoded + "&stat";
-            auto resp = m_http.get(url);
-
-            if (resp.ok() && !resp.body.empty()) {
-                rapidjson::Document doc;
-                doc.Parse(resp.body.c_str());
-                if (!doc.HasParseError() && doc.IsObject()) {
-                    std::string statStr = "";
-                    int peers = 0;
-                    double speed = 0.0;
-                    int percent = -1;
-
-                    if (doc.HasMember("stat_string") && doc["stat_string"].IsString()) {
-                        statStr = doc["stat_string"].GetString();
-                    }
-
-                    if (doc.HasMember("total_peers") && doc["total_peers"].IsInt()) {
-                        peers = doc["total_peers"].GetInt();
-                    }
-
-                    if (doc.HasMember("download_speed") && doc["download_speed"].IsNumber()) {
-                        speed = doc["download_speed"].GetDouble();
-                    }
-
-                    if (doc.HasMember("stat") && doc["stat"].IsInt()) {
-                        int stateVal = doc["stat"].GetInt();
-                        if (stateVal == 2) { // TorrentPreload
-                            int64_t preloadSize = 0;
-                            int64_t preloadedBytes = 0;
-                            if (doc.HasMember("preload_size") && doc["preload_size"].IsInt64()) {
-                                preloadSize = doc["preload_size"].GetInt64();
-                            }
-                            if (doc.HasMember("preloaded_bytes") && doc["preloaded_bytes"].IsInt64()) {
-                                preloadedBytes = doc["preloaded_bytes"].GetInt64();
-                            }
-                            if (preloadSize > 0) {
-                                percent = (int)((preloadedBytes * 100) / preloadSize);
-                            }
-                        }
-                    }
-
-                    {
-                        std::lock_guard<std::mutex> lock(m_torrentMutex);
-                        m_torrentStatString = statStr;
-                        m_torrentPeers = peers;
-                        m_torrentSpeed = speed;
-                        m_torrentPreloadPercent = percent;
-                    }
+                {
+                    std::lock_guard<std::mutex> lock(m_torrentMutex);
+                    m_torrentStatString = stats.statusStr;
+                    m_torrentPeers = stats.livePeers;
+                    m_torrentSpeed = stats.speedMBps * 1024.0 * 1024.0;
+                    m_torrentPreloadPercent = pct;
                 }
-            } else {
-                std::lock_guard<std::mutex> lock(m_torrentMutex);
-                m_torrentStatString = "TorrServer offline / unreachable";
-                m_torrentPeers = 0;
-                m_torrentSpeed = 0.0;
-                m_torrentPreloadPercent = -1;
             }
 
             // Interruptible sleep — wakes immediately on shutdown signal
@@ -3307,54 +3394,95 @@ void App::startTorrentPolling() {
             std::lock_guard<std::mutex> lock(m_torrentMutex);
             m_torrentPollingActive = false;
         }
-        printf("TorrServer stats polling thread finished.\n");
+        printf("[App] Native Torrent stats polling thread finished.\n");
     });
 }
 
 void App::playStream(const Stream& stream) {
-    if (stream.url.empty()) {
+    std::string playUrl = stream.url;
+    if (playUrl.empty() && !stream.infoHash.empty()) {
+        static const std::string DEFAULT_MAGNET_TRACKERS =
+            "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
+            "&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce"
+            "&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce"
+            "&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce"
+            "&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce";
+        playUrl = "magnet:?xt=urn:btih:" + stream.infoHash + DEFAULT_MAGNET_TRACKERS;
+    }
+
+    if (playUrl.empty()) {
         printf("[playStream] ERROR: stream URL is empty, name=%s\n", stream.name.c_str());
         return;
     }
     // Guard against non-playable URLs that somehow slipped through
-    bool isPlayable = stream.url.rfind("http", 0) == 0 ||
-                      stream.url.rfind("magnet:", 0) == 0;
+    bool isPlayable = playUrl.rfind("http", 0) == 0 ||
+                      playUrl.rfind("magnet:", 0) == 0;
     if (!isPlayable) {
-        printf("[playStream] ERROR: unplayable URL scheme: %s\n", stream.url.substr(0,60).c_str());
+        printf("[playStream] ERROR: unplayable URL scheme: %s\n", playUrl.substr(0,60).c_str());
         return;
     }
+
+    bool isTorrent = (!stream.infoHash.empty() || playUrl.rfind("magnet:", 0) == 0);
+    if (isTorrent && isFourKOrHigher(stream)) {
+        printf("[playStream] Blocked 4K/UHD torrent stream: %s (%s)\n", stream.name.c_str(), stream.title.c_str());
+        return;
+    }
+
+    // Debounce rapid duplicate clicks on the exact same stream (< 1000ms)
+    static uint32_t s_lastPlayTime = 0;
+    static std::string s_lastPlayUrl = "";
+    uint32_t now = SDL_GetTicks();
+    if (playUrl == s_lastPlayUrl && (now - s_lastPlayTime < 1000)) {
+        printf("[playStream] Debouncing rapid duplicate click on same stream\n");
+        return;
+    }
+    s_lastPlayTime = now;
+    s_lastPlayUrl = playUrl;
+
+    // Stop any previous playback session cleanly before starting new stream
+    m_player.stop();
 
     {
         std::lock_guard<std::mutex> lock(m_torrentMutex);
         m_lastPlayingMagnet = "";
+        m_pendingTorrentPlay = false;
+        m_torrentPollingActive = false;
     }
 
-    std::string playUrl = stream.url;
     if (playUrl.rfind("magnet:", 0) == 0) {
         {
             std::lock_guard<std::mutex> lock(m_torrentMutex);
             m_lastPlayingMagnet = playUrl;
+            m_torrentStatString = "Connecting to trackers...";
+            m_torrentPeers = 0;
+            m_torrentSpeed = 0.0;
+            m_torrentPreloadPercent = 0;
         }
-        std::string encoded;
-        for (char c : playUrl) {
-            if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.' || c == '~') {
-                encoded += c;
-            } else {
-                char hex[4];
-                snprintf(hex, sizeof(hex), "%%%02X", (unsigned char)c);
-                encoded += hex;
-            }
-        }
-        playUrl = m_addonManager.getTorrServerHost() + "/stream?link=" + encoded;
-        if (stream.fileIdx != -1) {
-            playUrl += "&index=" + std::to_string(stream.fileIdx);
-        } else {
-            playUrl += "&index=0";
-        }
-        playUrl += "&play";
-        printf("Routing torrent via TorrServer (%s): %s\n", m_addonManager.getTorrServerHost().c_str(), playUrl.c_str());
 
-        startTorrentPolling();
+        m_screen = Screen::PLAYER;
+        m_osdShowTime = SDL_GetTicks();
+        m_torrentBuffering = true;
+
+        printf("[App] Starting native BitTorrent engine asynchronously for: %s (fileIndex: %d)\n",
+               playUrl.substr(0, 60).c_str(), stream.fileIdx);
+
+        std::string headers = stream.httpHeaderFields;
+        TorrentStream::instance().startAsync(playUrl, stream.fileIdx, [this, headers](bool ok, const std::string& err) {
+            if (ok) {
+                printf("[App] Torrent metadata resolved, queuing playback on main thread!\n");
+                std::lock_guard<std::mutex> lock(m_torrentMutex);
+                m_pendingTorrentPlay = true;
+                m_pendingTorrentHeaders = headers;
+            } else {
+                printf("[App] Torrent start failed or cancelled: %s\n", err.c_str());
+            }
+        });
+
+        m_library.updateProgress(m_detailMeta.id, m_detailMeta.type,
+                                  m_detailMeta.name, m_detailMeta.poster,
+                                  m_detailMeta.id, 0.01);
+        m_library.save(LIB_FILE);
+        return;
     }
 
     printf("Playing stream URL: %s\n", playUrl.c_str());

@@ -186,7 +186,7 @@ void AddonManager::removeAddon(const std::string& addonId) {
     std::lock_guard<std::mutex> lock(m_addonsMutex);
     m_addons.erase(
         std::remove_if(m_addons.begin(), m_addons.end(),
-            [&](const InstalledAddon& a) { return a.manifest.id == addonId; }),
+            [&](const InstalledAddon& a) { return a.manifest.id == addonId || a.transportUrl == addonId; }),
         m_addons.end()
     );
 }

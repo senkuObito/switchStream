@@ -7,6 +7,7 @@
 
 #include <string>
 #include <vector>
+#include <atomic>
 #include <mpv/client.h>
 
 struct SDL_Window;
@@ -61,10 +62,12 @@ public:
     std::vector<AudioTrack> getAudioTracks();
     void setAudioTrack(int id);
 
-    // Get playback status
+    // Get playback status (all non-blocking, asynchronous observed values)
     bool isPaused() const;
     double getPosition() const;
     double getDuration() const;
+    double getCacheDuration() const;
+    bool isCacheIdle() const;
     bool isFinished() const;
     bool isBuffering() const;
     double getBufferingPercentage() const;
@@ -77,6 +80,9 @@ public:
     // Handle internal mpv events (call this in the main loop)
     void update();
 
+    // Access underlying mpv_handle
+    mpv_handle* getMpv() const { return m_mpv; }
+
     // Destroy mpv handle
     void shutdown();
 
@@ -86,6 +92,14 @@ private:
     bool m_paused = false;
     bool m_finished = false;
     std::string m_activeHeaders;
+
+    // Asynchronously observed properties (updated in update() via MPV_EVENT_PROPERTY_CHANGE)
+    std::atomic<double> m_cachedPos{0.0};
+    std::atomic<double> m_cachedDuration{0.0};
+    std::atomic<double> m_cachedCacheSecs{0.0};
+    std::atomic<bool> m_cachedCacheIdle{false};
+    std::atomic<bool> m_cachedBuffering{false};
+    std::atomic<bool> m_cachedPaused{false};
 };
 
 } // namespace ss

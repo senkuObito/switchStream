@@ -24,8 +24,8 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	switchstream
 BUILD		:=	build
-SOURCES		:=	source source/core source/ui source/net source/player
-INCLUDES	:=	include
+SOURCES		:=	source source/core source/ui source/net source/player source/torrent
+INCLUDES	:=	include include/torrent source/torrent
 ROMFS		:=	romfs
 
 #---------------------------------------------------------------------------------
@@ -36,7 +36,7 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DUSE_RAPIDJSON
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DUSE_RAPIDJSON -DPOSIX -D_GNU_SOURCE
 
 CXXFLAGS	:= $(CFLAGS) -std=c++17 -fno-rtti -fno-exceptions
 
@@ -46,7 +46,7 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 #---------------------------------------------------------------------------------
 # Libraries - kept minimal for lightweight build
 #---------------------------------------------------------------------------------
-LIBS	:= $(shell $(DEVKITPRO)/portlibs/switch/bin/aarch64-none-elf-pkg-config --libs mpv sdl2 SDL2_ttf SDL2_image libcurl) -lnx
+LIBS	:= $(shell $(DEVKITPRO)/portlibs/switch/bin/aarch64-none-elf-pkg-config --libs mpv sdl2 SDL2_ttf SDL2_image libcurl mbedtls mbedcrypto) -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries

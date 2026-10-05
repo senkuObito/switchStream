@@ -123,13 +123,16 @@ private:
     std::atomic<bool> m_loadingHome{false};
     std::mutex m_homeMutex;
 
-    // TorrServer torrent stats polling
+    // Torrent streaming state
     std::string m_lastPlayingMagnet;
     std::string m_torrentStatString;
     int m_torrentPeers = 0;
     double m_torrentSpeed = 0.0;
     int m_torrentPreloadPercent = -1;
+    bool m_torrentBuffering = false;
     bool m_torrentPollingActive = false;
+    bool m_pendingTorrentPlay = false;
+    std::string m_pendingTorrentHeaders;
     std::mutex m_torrentMutex;
     std::thread m_torrentPollingThread;
     std::thread m_homeLoadingThread;

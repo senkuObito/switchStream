@@ -4,6 +4,7 @@
 
 #include "player.h"
 #include "curl_stream.h"
+#include "../torrent/torrent_stream.h"
 #include <mpv/stream_cb.h>
 #include <mpv/render.h>
 #include <mpv/render_gl.h>
@@ -89,6 +90,20 @@ bool Player::init(SDL_Window* window, SDL_Renderer* renderer, bool hwDecode) {
     }
 #endif
 
+    // Register native BitTorrent streaming engine (torrent:// protocol)
+    TorrentStream::instance().registerWithMpv(m_mpv);
+
+    // Buffering & cache settings for smooth streaming
+    mpv_set_option_string(m_mpv, "cache", "yes");
+    mpv_set_option_string(m_mpv, "cache-pause", "no");
+    mpv_set_option_string(m_mpv, "demuxer-max-bytes", "128MiB");
+    mpv_set_option_string(m_mpv, "demuxer-readahead-secs", "30");
+    mpv_set_option_string(m_mpv, "cache-secs", "60");
+#ifdef __SWITCH__
+    mpv_set_option_string(m_mpv, "opengl-glfinish", "yes");
+    mpv_set_option_string(m_mpv, "vd-lavc-dr", "yes");
+#endif
+
     // Set a browser User-Agent for all mpv HTTP requests (helps CDN access)
     mpv_set_option_string(m_mpv, "user-agent",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -98,6 +113,15 @@ bool Player::init(SDL_Window* window, SDL_Renderer* renderer, bool hwDecode) {
         shutdown();
         return false;
     }
+
+    // Asynchronously observe properties so the UI thread NEVER needs to make
+    // blocking synchronous calls to mpv_get_property!
+    mpv_observe_property(m_mpv, 0, "demuxer-cache-duration", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_mpv, 0, "demuxer-cache-idle", MPV_FORMAT_FLAG);
+    mpv_observe_property(m_mpv, 0, "time-pos", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_mpv, 0, "duration", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(m_mpv, 0, "paused-for-cache", MPV_FORMAT_FLAG);
+    mpv_observe_property(m_mpv, 0, "pause", MPV_FORMAT_FLAG);
 
     // Initialize OpenGL render context
     mpv_opengl_init_params gl_init_params = {
@@ -322,15 +346,22 @@ void Player::play(const std::string& url, const std::string& headers) {
     double fullVol = 100.0;
     mpv_set_property(m_mpv, "volume", MPV_FORMAT_DOUBLE, &fullVol);
 
-    // Explicitly unpause on the mpv handle when starting a new stream
-    int pauseVal = 0;
+    m_cachedPos.store(0.0);
+    m_cachedDuration.store(0.0);
+    m_cachedCacheSecs.store(0.0);
+    m_cachedCacheIdle.store(false);
+    m_cachedBuffering.store(false);
+    m_finished = false;
+
+    // For torrent streams, start paused so demuxer cache fills before unpausing
+    bool isTorrent = (url.rfind("torrent:", 0) == 0);
+    int pauseVal = isTorrent ? 1 : 0;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &pauseVal);
+    m_paused = isTorrent;
+    m_cachedPaused.store(isTorrent);
 
     const char* cmd[] = {"loadfile", url.c_str(), nullptr};
     mpv_command(m_mpv, cmd);
-
-    m_paused = false;
-    m_finished = false;
 }
 
 void Player::pause() {
@@ -338,6 +369,7 @@ void Player::pause() {
     int val = 1;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &val);
     m_paused = true;
+    m_cachedPaused.store(true);
 }
 
 void Player::resume() {
@@ -345,6 +377,7 @@ void Player::resume() {
     int val = 0;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &val);
     m_paused = false;
+    m_cachedPaused.store(false);
 }
 
 void Player::togglePlay() {
@@ -355,21 +388,33 @@ void Player::togglePlay() {
 void Player::stop() {
     if (!m_mpv) return;
 
-    // 1. Software mute + zero volume — instant silence in the pipeline
+    // 1. Tell torrent engine to cancel any blocking reads (~20ms)
+    TorrentStream::instance().cancel();
+
+    // 2. Software mute + zero volume — instant silence in the pipeline
     //    (ao-mute is read-only on Switch, so we use mute + volume=0)
     int muteVal = 1;
     mpv_set_property(m_mpv, "mute",   MPV_FORMAT_FLAG,   &muteVal);
     double zeroVol = 0.0;
     mpv_set_property(m_mpv, "volume", MPV_FORMAT_DOUBLE, &zeroVol);
-
-    // 2. Pause immediately, then issue the async stop command
     int pauseVal = 1;
     mpv_set_property(m_mpv, "pause", MPV_FORMAT_FLAG, &pauseVal);
+
+    // 3. Command mpv to stop playback and shut down its demuxer
     const char* cmd[] = {"stop", nullptr};
     mpv_command(m_mpv, cmd);
 
+    // 4. Safely shut down torrent engine after mpv has closed the stream
+    TorrentStream::instance().stop();
+
     m_paused   = true;
-    m_finished = true;
+    m_finished = false;
+    m_cachedPos.store(0.0);
+    m_cachedDuration.store(0.0);
+    m_cachedCacheSecs.store(0.0);
+    m_cachedCacheIdle.store(false);
+    m_cachedBuffering.store(false);
+    m_cachedPaused.store(true);
 }
 
 void Player::seek(double offsetSeconds) {
@@ -413,21 +458,23 @@ void Player::cycleAudio() {
 }
 
 bool Player::isPaused() const {
-    return m_paused;
+    return m_cachedPaused.load();
 }
 
 double Player::getPosition() const {
-    if (!m_mpv) return 0.0;
-    double pos = 0.0;
-    mpv_get_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &pos);
-    return pos;
+    return m_cachedPos.load();
 }
 
 double Player::getDuration() const {
-    if (!m_mpv) return 0.0;
-    double duration = 0.0;
-    mpv_get_property(m_mpv, "duration", MPV_FORMAT_DOUBLE, &duration);
-    return duration;
+    return m_cachedDuration.load();
+}
+
+double Player::getCacheDuration() const {
+    return m_cachedCacheSecs.load();
+}
+
+bool Player::isCacheIdle() const {
+    return m_cachedCacheIdle.load();
 }
 
 bool Player::isFinished() const {
@@ -435,12 +482,7 @@ bool Player::isFinished() const {
 }
 
 bool Player::isBuffering() const {
-    if (!m_mpv) return false;
-    int val = 0;
-    if (mpv_get_property(m_mpv, "paused-for-cache", MPV_FORMAT_FLAG, &val) >= 0) {
-        return (val != 0);
-    }
-    return false;
+    return m_cachedBuffering.load();
 }
 
 double Player::getBufferingPercentage() const {
@@ -457,15 +499,38 @@ void Player::update() {
         mpv_event* event = mpv_wait_event(m_mpv, 0); // non-blocking poll
         if (event->event_id == MPV_EVENT_NONE) break;
 
-        printf("[Player] Event: %s (%d)\n", mpv_event_name(event->event_id), event->event_id);
-
         switch (event->event_id) {
+            case MPV_EVENT_PROPERTY_CHANGE: {
+                auto* prop = (mpv_event_property*)event->data;
+                if (!prop || !prop->data) break;
+                if (prop->format == MPV_FORMAT_DOUBLE) {
+                    double val = *(double*)prop->data;
+                    if (strcmp(prop->name, "time-pos") == 0) {
+                        m_cachedPos.store(val);
+                    } else if (strcmp(prop->name, "duration") == 0) {
+                        m_cachedDuration.store(val);
+                    } else if (strcmp(prop->name, "demuxer-cache-duration") == 0) {
+                        m_cachedCacheSecs.store(val);
+                        TorrentStream::instance().setBacklog((int)(val * 1000.0));
+                    }
+                } else if (prop->format == MPV_FORMAT_FLAG) {
+                    int flag = *(int*)prop->data;
+                    if (strcmp(prop->name, "demuxer-cache-idle") == 0) {
+                        m_cachedCacheIdle.store(flag != 0);
+                    } else if (strcmp(prop->name, "paused-for-cache") == 0) {
+                        m_cachedBuffering.store(flag != 0);
+                    } else if (strcmp(prop->name, "pause") == 0) {
+                        m_cachedPaused.store(flag != 0);
+                        m_paused = (flag != 0);
+                    }
+                }
+                break;
+            }
             case MPV_EVENT_END_FILE: {
                 mpv_event_end_file* end = (mpv_event_end_file*)event->data;
-                printf("[Player] End file reason: %d, error code: %d\n", end->reason, end->error);
-                                if (end->reason == MPV_END_FILE_REASON_EOF ||
-                    end->reason == MPV_END_FILE_REASON_ERROR ||
-                    end->reason == MPV_END_FILE_REASON_STOP) {
+                printf("[Player] End file reason: %d, error code: %d, pos: %.2f\n",
+                       end->reason, end->error, m_cachedPos.load());
+                if (end->reason == MPV_END_FILE_REASON_EOF && m_cachedPos.load() > 1.0) {
                     m_finished = true;
                 }
                 break;
@@ -477,6 +542,7 @@ void Player::update() {
 }
 
 void Player::shutdown() {
+    TorrentStream::instance().stop();
     if (m_mpvGL) {
         mpv_render_context_free(m_mpvGL);
         m_mpvGL = nullptr;

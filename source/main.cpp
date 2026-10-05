@@ -32,8 +32,16 @@ int main(int argc, char* argv[]) {
 #endif
 
 #ifdef __SWITCH__
-    // Initialize Switch services
-    socketInitializeDefault();
+    // Initialize Switch services with expanded socket sessions for BitTorrent networking
+    SocketInitConfig cfg = *(socketGetDefaultInitConfig());
+    cfg.num_bsd_sessions = 16;
+    cfg.sb_efficiency    = 8;
+    cfg.tcp_tx_buf_size     = 0x4000;
+    cfg.tcp_rx_buf_size     = 0x8000;
+    cfg.tcp_tx_buf_max_size = 0x40000;
+    cfg.tcp_rx_buf_max_size = 0x40000;
+    socketInitialize(&cfg);
+
     mkdir("sdmc:/switch", 0777);
     mkdir("sdmc:/switch/switchstream", 0777);
     freopen("sdmc:/switch/switchstream/log.txt", "w", stdout);
