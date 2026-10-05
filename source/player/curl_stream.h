@@ -15,19 +15,21 @@ public:
 
     int64_t read(char* buf, uint64_t nbytes);
     int64_t seek(int64_t offset);
-    int64_t getSize() const { return m_totalSize; }
+    int64_t getSize() const;
+    void cancel();
 
 private:
     void startThread(int64_t offset);
     void stopThread();
     static size_t writeCallback(char* ptr, size_t size, size_t nmemb, void* userdata);
+    static int xferInfoCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow);
     void curlThreadFunc(int64_t offset);
 
     std::string m_url;
     std::string m_headers;
 
     std::thread m_thread;
-    std::mutex m_mutex;
+    mutable std::mutex m_mutex;
     std::condition_variable m_cv_read;
     std::condition_variable m_cv_write;
 

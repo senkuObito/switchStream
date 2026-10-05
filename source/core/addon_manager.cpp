@@ -136,6 +136,11 @@ bool AddonManager::loadConfig(const std::string& configPath) {
         }
     }
 
+    {
+        std::lock_guard<std::mutex> lock(m_addonsMutex);
+        sortAddons();
+    }
+
     return true;
 }
 
@@ -274,11 +279,13 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
                 if (a.manifest.id == addon.manifest.id) {
                     a.transportUrl = transportUrl;
                     a.manifest     = addon.manifest;
+                    sortAddons();
                     return true;
                 }
             }
         }
         m_addons.push_back(std::move(addon));
+        sortAddons();
     }
     return true;
 }
@@ -296,6 +303,7 @@ void AddonManager::addAddon(const InstalledAddon& addon) {
         if (!a.manifest.id.empty() && existing.manifest.id == a.manifest.id) return;
     }
     m_addons.push_back(std::move(a));
+    sortAddons();
 }
 
 void AddonManager::removeAddon(const std::string& addonId) {
@@ -317,6 +325,16 @@ void AddonManager::toggleAddon(const std::string& addonId) {
             a.enabled = !a.enabled;
         }
     }
+    sortAddons();
+}
+
+void AddonManager::sortAddons() {
+    std::stable_sort(m_addons.begin(), m_addons.end(), [](const InstalledAddon& a, const InstalledAddon& b) {
+        if (a.enabled != b.enabled) {
+            return a.enabled > b.enabled; // true (active) comes before false (disabled)
+        }
+        return false;
+    });
 }
 
 void AddonManager::ensureManifest(InstalledAddon& addon) {

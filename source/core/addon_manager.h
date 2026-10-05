@@ -97,6 +97,9 @@ public:
     static std::string getAddonCategoryBadge(const InstalledAddon& addon);
 
 private:
+    // Sort installed addons so enabled/active ones are at the top and disabled ones below
+    void sortAddons();
+
     // Ensure manifest is fetched on the fly if it failed at startup
     void ensureManifest(InstalledAddon& addon);
 

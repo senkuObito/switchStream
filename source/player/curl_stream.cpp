@@ -5,7 +5,7 @@
 
 namespace ss {
 
-static const size_t RING_BUFFER_SIZE = 8 * 1024 * 1024; // 8MB — prevents stutter at 1080p (5Mbps fills 2MB in ~3s)
+static const size_t RING_BUFFER_SIZE = 2 * 1024 * 1024; // 2MB — optimal for Switch memory & multiple concurrent HLS streams
 
 CurlStream::CurlStream(const std::string& url, const std::string& headers)
     : m_url(url), m_headers(headers), m_buffer(RING_BUFFER_SIZE) {
@@ -46,6 +46,32 @@ void CurlStream::stopThread() {
     if (m_thread.joinable()) {
         m_thread.join();
     }
+}
+
+void CurlStream::cancel() {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    m_stop = true;
+    m_cv_write.notify_all();
+    m_cv_read.notify_all();
+}
+
+int64_t CurlStream::getSize() const {
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (m_totalSize > 0) {
+        return m_totalSize;
+    }
+    return -18; // MPV_ERROR_UNSUPPORTED: size unknown
+}
+
+int CurlStream::xferInfoCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+    (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    CurlStream* self = static_cast<CurlStream*>(clientp);
+    if (!self) return 0;
+    std::unique_lock<std::mutex> lock(self->m_mutex);
+    if (self->m_stop) {
+        return 1; // Non-zero aborts transfer immediately
+    }
+    return 0;
 }
 
 size_t CurlStream::writeCallback(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -105,13 +131,24 @@ void CurlStream::curlThreadFunc(int64_t offset) {
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &CurlStream::writeCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, this);
+
+    // Multithreading & network safety on Nintendo Switch
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 15L);
+
+    // Immediate cancellation hook
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, &CurlStream::xferInfoCallback);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this);
     
-    // Disable certificate validation internally to bypass any remaining handshake failures
+    // Disable certificate validation internally to bypass any handshake failures
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
     // Only set a fallback UA if the stream headers don't already supply one.
-    // Sending two User-Agent headers causes some CDNs to reject the request.
     bool hasCustomUA = (m_headers.find("User-Agent:") != std::string::npos ||
                         m_headers.find("user-agent:") != std::string::npos);
     if (!hasCustomUA) {
@@ -160,11 +197,8 @@ void CurlStream::curlThreadFunc(int64_t offset) {
             printf("[CurlStream] curl_easy_perform failed: %s\n", curl_easy_strerror(res));
             m_error = true;
         } else if (httpCode >= 400) {
-            // Server returned an error page (4xx/5xx) — treat as stream failure.
-            // Without this check mpv tries to parse the HTML as video data and
-            // reports a misleading "unrecognized file format" error.
             printf("[CurlStream] HTTP error %ld for URL: %.80s...\n", httpCode, m_url.c_str());
-            m_bufferCount = 0; // discard any HTML body already buffered
+            m_bufferCount = 0;
             m_bufferHead  = 0;
             m_bufferTail  = 0;
             m_error = true;
@@ -220,8 +254,32 @@ int64_t CurlStream::read(char* buf, uint64_t nbytes) {
 }
 
 int64_t CurlStream::seek(int64_t offset) {
-    // Start a new curl transfer at the requested offset
-    printf("[CurlStream] Seeking to offset: %lld\n", (long long)offset);
+    if (offset < 0) {
+        return -18; // MPV_ERROR_UNSUPPORTED
+    }
+
+    std::unique_lock<std::mutex> lock(m_mutex);
+
+    // If seeking to current position, no-op (critical: prevents destroying thread on seek(0))
+    if (offset == m_position) {
+        return m_position;
+    }
+
+    // If seeking forward and the target offset is already buffered in memory:
+    if (offset > m_position) {
+        int64_t diff = offset - m_position;
+        if ((size_t)diff <= m_bufferCount) {
+            m_bufferHead = (m_bufferHead + (size_t)diff) % RING_BUFFER_SIZE;
+            m_bufferCount -= (size_t)diff;
+            m_position = offset;
+            m_cv_write.notify_all();
+            return m_position;
+        }
+    }
+
+    lock.unlock();
+
+    printf("[CurlStream] Seeking to offset: %lld (from %lld)\n", (long long)offset, (long long)m_position);
     startThread(offset);
     return offset;
 }

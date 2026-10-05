@@ -47,6 +47,9 @@ static int stream_open_cb(void* user_data, char* uri, mpv_stream_cb_info* info) 
     info->close_fn = [](void* cookie) {
         delete static_cast<CurlStream*>(cookie);
     };
+    info->cancel_fn = [](void* cookie) {
+        if (cookie) static_cast<CurlStream*>(cookie)->cancel();
+    };
     return 0;
 }
 
@@ -81,12 +84,16 @@ bool Player::init(SDL_Window* window, SDL_Renderer* renderer, bool hwDecode) {
     mpv_set_option(m_mpv, "osc", MPV_FORMAT_FLAG, &val); // handle on-screen controls cross-platform
 
 #ifdef __SWITCH__
-    // On Switch, mpv's libavformat is compiled without native https support.
-    // Register CurlStream for https so all https:// URLs (including HLS/DASH
+    // On Switch, mpv's libavformat is compiled without native https/http stream networking.
+    // Register CurlStream for https and http so all web URLs (including HLS/DASH
     // sub-requests for segments) can be fetched via libcurl.
     int cb_err = mpv_stream_cb_add_ro(m_mpv, "https", this, stream_open_cb);
     if (cb_err < 0) {
         printf("[Player] Failed to register https callback: %s\n", mpv_error_string(cb_err));
+    }
+    cb_err = mpv_stream_cb_add_ro(m_mpv, "http", this, stream_open_cb);
+    if (cb_err < 0) {
+        printf("[Player] Failed to register http callback: %s\n", mpv_error_string(cb_err));
     }
 #endif
 

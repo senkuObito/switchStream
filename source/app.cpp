@@ -75,7 +75,7 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     {"TorrentsDB", "TorrentsDB multi-tracker torrent stream search.", "https://torrentsdb.com/manifest.json"},
     {"StreamViX | ElfHosted", "StreamViX multi-source HTTP streams provider.", "https://streamvix.hayd.uk/manifest.json"},
     {"NoDebrid", "Direct HTTP/HLS streams without requiring Debrid subscriptions.", "https://nodebrid.fly.dev/manifest.json"},
-    {"StreamAsia", "Asian drama, movie and series streams from Dramacool.", "https://stremio-dramacool-addon.xyz/manifest.json"},
+    {"StreamAsia (Offline)", "Defunct/offline - use Dramayo or yastream for Asian dramas.", "https://stremio-dramacool-addon.xyz/manifest.json"},
     {"Flix Streams", "HTTP streams from multiple sources.", "https://flixnest.app/flix-streams/manifest.json"},
     {"Nebula Streams", "HTTP streams from multiple sources.", "https://nebulastreams.onrender.com/manifest.json"},
     {"MovieBox", "HTTP streams for movies and series.", "https://moviebox-cfa7.onrender.com/manifest.json"},
@@ -3883,11 +3883,17 @@ void App::renderAddons() {
     drawFilledRect(leftX, leftY, leftW, leftH, {0, 0, 0, 160}); // base panel
     drawRect(leftX, leftY, leftW, leftH, {255, 255, 255, 25}); // border
     
+    auto addons = m_addonManager.getAddons();
+    int activeCount = 0;
+    for (const auto& a : addons) {
+        if (a.enabled) activeCount++;
+    }
+    int disabledCount = (int)addons.size() - activeCount;
+    std::string installedTitle = "Installed Addons (" + std::to_string(activeCount) + " Active, " + std::to_string(disabledCount) + " Inactive)";
+
     // Header
     drawFilledRect(leftX, leftY, leftW, 35, {100, 120, 255, 30});
-    drawText("Installed Addons", leftX + 15, leftY + 8, TEXT_PRIMARY, m_fontNormal);
-
-    auto addons = m_addonManager.getAddons();
+    drawText(installedTitle, leftX + 15, leftY + 8, TEXT_PRIMARY, m_fontNormal);
     
     // Right Pane: Discover Addons
     int rightX = 660;
@@ -3925,6 +3931,11 @@ void App::renderAddons() {
         }
         
         for (int i = startIndex; i < (int)addons.size() && (itemY + 60) <= (leftY + leftH - 20); i++) {
+            // Draw visual divider line when transitioning from Active to Inactive addons
+            if (i > 0 && !addons[i].enabled && addons[i - 1].enabled) {
+                drawFilledRect(leftX + 15, itemY - 3, leftW - 30, 2, {255, 255, 255, 35});
+            }
+
             bool sel = (!m_addonDiscoverPane && i == m_addonIndex);
             if (sel) {
                 drawFilledRect(leftX + 5, itemY - 2, leftW - 10, 56, CARD_HL);
@@ -3935,10 +3946,10 @@ void App::renderAddons() {
             if (name.empty()) name = AddonManager::getAddonFallbackName(addons[i].transportUrl);
 
             std::string badge = AddonManager::getAddonCategoryBadge(addons[i]);
-            std::string statusTag = addons[i].enabled ? " [Active]" : " [Disabled]";
+            std::string statusTag = addons[i].enabled ? " [Active]" : " [Inactive]";
             std::string displayName = name + "  " + badge + statusTag;
 
-            SDL_Color textColor = sel ? ACCENT : (addons[i].enabled ? TEXT_PRIMARY : TEXT_SECONDARY);
+            SDL_Color textColor = sel ? ACCENT : (addons[i].enabled ? TEXT_PRIMARY : SDL_Color{140, 140, 150, 200});
             drawText(displayName, leftX + 15, itemY + 4, textColor, m_fontNormal);
             
             std::string desc = addons[i].manifest.description;
