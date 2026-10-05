@@ -206,10 +206,14 @@ private:
     static constexpr const char* DATA_DIR    = "sdmc:/switch/switchstream/";
     static constexpr const char* CONFIG_FILE = "sdmc:/switch/switchstream/addons.json";
     static constexpr const char* LIB_FILE    = "sdmc:/switch/switchstream/library.json";
+    static constexpr const char* CACHE_DIR   = "sdmc:/switch/switchstream/imgcache";
+    static constexpr const char* HOME_CACHE  = "sdmc:/switch/switchstream/home_cache.json";
 #else
     static constexpr const char* DATA_DIR    = "./switchstream_data/";
     static constexpr const char* CONFIG_FILE = "./switchstream_data/addons.json";
     static constexpr const char* LIB_FILE    = "./switchstream_data/library.json";
+    static constexpr const char* CACHE_DIR   = "./switchstream_data/imgcache";
+    static constexpr const char* HOME_CACHE  = "./switchstream_data/home_cache.json";
 #endif
 
     struct DownloadedImage {
@@ -221,12 +225,20 @@ private:
     std::set<std::string> m_loadingPosters;
     std::set<std::string> m_failedPosters;
 
+    static constexpr int NUM_DOWNLOAD_WORKERS = 6;
     std::mutex m_downloadQueueMutex;
     std::vector<std::string> m_downloadQueue;
-    std::thread m_downloadWorkerThread;
+    std::vector<std::thread> m_downloadWorkers;
     bool m_downloadWorkerRunning = false;
     std::condition_variable m_downloadQueueCV;
     void downloadWorkerLoop();
+
+    std::string getDiskCachePath(const std::string& url);
+    bool readDiskCache(const std::string& path, std::string& outData);
+    void writeDiskCache(const std::string& path, const std::string& data);
+    void prequeuePosters(const std::vector<CatalogRow>& rows, int maxRows = 3);
+    bool saveHomeCache(const std::string& path, const std::vector<CatalogRow>& catalogs);
+    bool loadHomeCache(const std::string& path, std::vector<CatalogRow>& outCatalogs);
 
     // Shutdown coordination — allows sleeping threads to wake immediately
     std::atomic<bool> m_shuttingDown{false};

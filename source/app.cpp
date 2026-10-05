@@ -10,8 +10,12 @@
 #include <thread>
 #include <future>
 #include <sstream>
+#include <fstream>
 #include <regex>
+#include <sys/stat.h>
 #include <rapidjson/document.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 
 #ifdef __SWITCH__
 #include <switch.h>
@@ -113,8 +117,19 @@ bool App::init() {
     if (TTF_Init() < 0) return false;
     if (IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG) == 0) return false;
 
+#ifdef __SWITCH__
+    mkdir("sdmc:/switch", 0777);
+    mkdir("sdmc:/switch/switchstream", 0777);
+    mkdir("sdmc:/switch/switchstream/imgcache", 0777);
+#else
+    system("mkdir -p ./switchstream_data/imgcache");
+#endif
+
     m_downloadWorkerRunning = true;
-    m_downloadWorkerThread = std::thread(&App::downloadWorkerLoop, this);
+    m_downloadWorkers.clear();
+    for (int i = 0; i < NUM_DOWNLOAD_WORKERS; ++i) {
+        m_downloadWorkers.emplace_back(&App::downloadWorkerLoop, this);
+    }
     
     m_workerRunning = true;
     m_detailWorkerThread = std::thread(&App::detailWorkerLoop, this);
@@ -229,8 +244,11 @@ bool App::init() {
                 }
             }
             if (!found) {
-                printf("Installing missing default addon: %s\n", url.c_str());
-                m_addonManager.installAddon(url);
+                printf("Registering missing default addon: %s\n", url.c_str());
+                InstalledAddon a;
+                a.transportUrl = url;
+                a.enabled = true;
+                m_addonManager.addAddon(a);
                 updatedAddons = true;
             }
         }
@@ -239,7 +257,17 @@ bool App::init() {
         }
     }
 
-    // Load home catalogs
+    // 1. Try loading cached home catalogs from disk for instant startup (< 5ms)
+    std::vector<CatalogRow> cachedRows;
+    if (loadHomeCache(HOME_CACHE, cachedRows)) {
+        std::lock_guard<std::mutex> lock(m_homeMutex);
+        m_homeCatalogs = std::move(cachedRows);
+        prequeuePosters(m_homeCatalogs, 3);
+        m_loadingHome = false;
+        printf("[App] Instantly loaded %zu home catalog rows from disk cache!\n", m_homeCatalogs.size());
+    }
+
+    // 2. Fetch fresh home catalogs in the background
     loadHomeCatalogs();
 
 #ifdef __SWITCH__
@@ -2802,16 +2830,16 @@ void App::renderHome() {
     drawRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {44, 52, 74, 180});
     drawTextCentered("[+] Exit", SCREEN_W - 85, 23, TEXT_SECONDARY, m_fontSmall);
 
-    if (m_loadingHome) {
-        drawSpinner(SCREEN_W/2, SCREEN_H/2 - 40, 24);
-        drawTextCentered("Loading catalogs...", SCREEN_W/2, SCREEN_H/2 + 25, TEXT_SECONDARY);
-        return;
-    }
-
     std::vector<CatalogRow> localCatalogs;
     {
         std::lock_guard<std::mutex> lock(m_homeMutex);
         localCatalogs = m_homeCatalogs;
+    }
+
+    if (m_loadingHome && localCatalogs.empty()) {
+        drawSpinner(SCREEN_W/2, SCREEN_H/2 - 40, 24);
+        drawTextCentered("Loading catalogs...", SCREEN_W/2, SCREEN_H/2 + 25, TEXT_SECONDARY);
+        return;
     }
 
     if (localCatalogs.empty()) {
@@ -3714,6 +3742,136 @@ void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
     drawSpinner(x + w / 2, y + h / 2, 16);
 }
 
+static std::string urlToHash(const std::string& url) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (char c : url) {
+        hash ^= (uint64_t)(unsigned char)c;
+        hash *= 1099511628211ULL;
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)hash);
+    return std::string(buf);
+}
+
+std::string App::getDiskCachePath(const std::string& url) {
+    if (url.empty()) return "";
+    return std::string(CACHE_DIR) + "/" + urlToHash(url) + ".cache";
+}
+
+bool App::readDiskCache(const std::string& path, std::string& outData) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f.is_open()) return false;
+    f.seekg(0, std::ios::end);
+    std::streampos sz = f.tellg();
+    if (sz <= 0 || sz > 10 * 1024 * 1024) return false;
+    f.seekg(0, std::ios::beg);
+    outData.resize(static_cast<size_t>(sz));
+    f.read(&outData[0], sz);
+    return f.good();
+}
+
+void App::writeDiskCache(const std::string& path, const std::string& data) {
+    if (data.empty()) return;
+    std::ofstream f(path, std::ios::binary);
+    if (!f.is_open()) return;
+    f.write(data.data(), data.size());
+}
+
+void App::prequeuePosters(const std::vector<CatalogRow>& rows, int maxRows) {
+    std::lock_guard<std::mutex> lock(m_downloadQueueMutex);
+    for (int r = 0; r < (int)rows.size() && r < maxRows; ++r) {
+        for (const auto& item : rows[r].items) {
+            if (item.poster.empty()) continue;
+            if (m_imageCache && m_imageCache->has(item.poster)) continue;
+            if (std::find(m_downloadQueue.begin(), m_downloadQueue.end(), item.poster) == m_downloadQueue.end()) {
+                m_downloadQueue.push_back(item.poster);
+            }
+        }
+    }
+    m_downloadQueueCV.notify_all();
+}
+
+bool App::saveHomeCache(const std::string& path, const std::vector<CatalogRow>& catalogs) {
+    if (catalogs.empty()) return false;
+    rapidjson::StringBuffer sb;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(sb);
+
+    writer.StartObject();
+    writer.Key("catalogs");
+    writer.StartArray();
+    for (const auto& row : catalogs) {
+        writer.StartObject();
+        writer.Key("addonName");    writer.String(row.addonName.c_str());
+        writer.Key("catalogName");  writer.String(row.catalogName.c_str());
+        writer.Key("type");         writer.String(row.type.c_str());
+        writer.Key("catalogId");    writer.String(row.catalogId.c_str());
+        writer.Key("transportUrl"); writer.String(row.transportUrl.c_str());
+        writer.Key("items");
+        writer.StartArray();
+        for (const auto& item : row.items) {
+            writer.StartObject();
+            writer.Key("id");          writer.String(item.id.c_str());
+            writer.Key("type");        writer.String(item.type.c_str());
+            writer.Key("name");        writer.String(item.name.c_str());
+            writer.Key("poster");      writer.String(item.poster.c_str());
+            writer.Key("releaseInfo"); writer.String(item.releaseInfo.c_str());
+            writer.Key("imdbRating");  writer.String(item.imdbRating.c_str());
+            writer.EndObject();
+        }
+        writer.EndArray();
+        writer.EndObject();
+    }
+    writer.EndArray();
+    writer.EndObject();
+
+    std::ofstream file(path);
+    if (!file.is_open()) return false;
+    file << sb.GetString();
+    return true;
+}
+
+bool App::loadHomeCache(const std::string& path, std::vector<CatalogRow>& outCatalogs) {
+    std::ifstream file(path);
+    if (!file.is_open()) return false;
+    std::string content((std::istreambuf_iterator<char>(file)),
+                        std::istreambuf_iterator<char>());
+    if (content.empty()) return false;
+
+    rapidjson::Document doc;
+    doc.Parse(content.c_str());
+    if (doc.HasParseError() || !doc.IsObject() || !doc.HasMember("catalogs") || !doc["catalogs"].IsArray()) {
+        return false;
+    }
+
+    outCatalogs.clear();
+    for (const auto& r : doc["catalogs"].GetArray()) {
+        if (!r.IsObject()) continue;
+        CatalogRow row;
+        if (r.HasMember("addonName") && r["addonName"].IsString()) row.addonName = r["addonName"].GetString();
+        if (r.HasMember("catalogName") && r["catalogName"].IsString()) row.catalogName = r["catalogName"].GetString();
+        if (r.HasMember("type") && r["type"].IsString()) row.type = r["type"].GetString();
+        if (r.HasMember("catalogId") && r["catalogId"].IsString()) row.catalogId = r["catalogId"].GetString();
+        if (r.HasMember("transportUrl") && r["transportUrl"].IsString()) row.transportUrl = r["transportUrl"].GetString();
+        if (r.HasMember("items") && r["items"].IsArray()) {
+            for (const auto& m : r["items"].GetArray()) {
+                if (!m.IsObject()) continue;
+                MetaItem item;
+                if (m.HasMember("id") && m["id"].IsString()) item.id = m["id"].GetString();
+                if (m.HasMember("type") && m["type"].IsString()) item.type = m["type"].GetString();
+                if (m.HasMember("name") && m["name"].IsString()) item.name = m["name"].GetString();
+                if (m.HasMember("poster") && m["poster"].IsString()) item.poster = m["poster"].GetString();
+                if (m.HasMember("releaseInfo") && m["releaseInfo"].IsString()) item.releaseInfo = m["releaseInfo"].GetString();
+                if (m.HasMember("imdbRating") && m["imdbRating"].IsString()) item.imdbRating = m["imdbRating"].GetString();
+                row.items.push_back(std::move(item));
+            }
+        }
+        if (!row.items.empty()) {
+            outCatalogs.push_back(std::move(row));
+        }
+    }
+    return !outCatalogs.empty();
+}
+
 void App::downloadWorkerLoop() {
     while (m_downloadWorkerRunning) {
         std::string url;
@@ -3727,15 +3885,33 @@ void App::downloadWorkerLoop() {
             m_downloadQueue.erase(m_downloadQueue.begin());
         }
 
-        // Fetch image bytes (blocking HTTP call in background worker thread)
-        auto resp = m_http.downloadBytes(url);
+        std::string cacheFile = getDiskCachePath(url);
+        std::string imgData;
+        bool loadedFromDisk = false;
 
+        // 1. Check persistent SD card disk cache first
+        if (!cacheFile.empty() && readDiskCache(cacheFile, imgData)) {
+            loadedFromDisk = true;
+        }
+
+        // 2. If not on disk, download via HTTP with 10s timeout
+        if (!loadedFromDisk) {
+            auto resp = m_http.downloadBytes(url, 10);
+            if (resp.ok() && !resp.body.empty()) {
+                imgData = std::move(resp.body);
+                if (!cacheFile.empty()) {
+                    writeDiskCache(cacheFile, imgData);
+                }
+            }
+        }
+
+        // 3. Dispatch to main thread for texture creation
         std::lock_guard<std::mutex> lock(m_downloadedMutex);
         m_loadingPosters.erase(url);
-        if (resp.ok() && !resp.body.empty()) {
+        if (!imgData.empty()) {
             DownloadedImage img;
             img.url = url;
-            img.data = std::move(resp.body);
+            img.data = std::move(imgData);
             m_downloadedQueue.push_back(std::move(img));
         } else {
             m_failedPosters.insert(url);
@@ -3749,7 +3925,6 @@ void App::loadHomeCatalogs() {
     if (m_loadingHome) return;
     if (m_homeLoadingThread.joinable()) {
         // Cancel in-flight HTTP so the join returns immediately (~1s max)
-        // instead of waiting for a multi-second catalog fetch to finish.
         m_http.cancel();
         m_homeLoadingThread.join();
         m_http.reset(); // allow future requests
@@ -3759,7 +3934,11 @@ void App::loadHomeCatalogs() {
         auto catalogs = m_addonManager.getHomeCatalogs();
         {
             std::lock_guard<std::mutex> lock(m_homeMutex);
-            m_homeCatalogs = std::move(catalogs);
+            if (!catalogs.empty()) {
+                m_homeCatalogs = std::move(catalogs);
+                saveHomeCache(HOME_CACHE, m_homeCatalogs);
+                prequeuePosters(m_homeCatalogs, 3);
+            }
         }
         m_loadingHome = false;
     });
@@ -4215,9 +4394,12 @@ void App::shutdown() {
     // 1. Terminate and join all background threads
     m_downloadWorkerRunning = false;
     m_downloadQueueCV.notify_all();
-    if (m_downloadWorkerThread.joinable()) {
-        m_downloadWorkerThread.join();
+    for (auto& t : m_downloadWorkers) {
+        if (t.joinable()) {
+            t.join();
+        }
     }
+    m_downloadWorkers.clear();
 
     {
         std::lock_guard<std::mutex> lock(m_torrentMutex);

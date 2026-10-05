@@ -196,6 +196,15 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
     return true;
 }
 
+void AddonManager::addAddon(const InstalledAddon& addon) {
+    std::lock_guard<std::mutex> lock(m_addonsMutex);
+    for (const auto& a : m_addons) {
+        if (a.transportUrl == addon.transportUrl) return;
+        if (!addon.manifest.id.empty() && a.manifest.id == addon.manifest.id) return;
+    }
+    m_addons.push_back(addon);
+}
+
 void AddonManager::removeAddon(const std::string& addonId) {
     std::lock_guard<std::mutex> lock(m_addonsMutex);
     m_addons.erase(
@@ -298,24 +307,34 @@ std::vector<CatalogRow> AddonManager::getHomeCatalogs(const std::string& type) {
         futures.push_back(std::async(std::launch::async,
             [this, addon, type]() mutable -> RowVec {
                 ensureManifest(addon);
-                RowVec rows;
+                std::vector<std::future<CatalogRow>> catFutures;
+                int count = 0;
                 for (auto& cat : addon.manifest.catalogs) {
                     if (!type.empty() && cat.type != type) continue;
                     if (cat.hasRequiredExtras) continue;
+                    if (++count > 4) break; // Limit to 4 primary catalogs per addon on home screen
 
-                    CatalogRow row;
-                    row.addonName    = addon.manifest.name;
-                    row.catalogName  = cat.name.empty() ? cat.id : cat.name;
-                    row.type         = cat.type;
-                    row.catalogId    = cat.id;
-                    row.transportUrl = addon.transportUrl;
+                    catFutures.push_back(std::async(std::launch::async,
+                        [this, addon, cat]() -> CatalogRow {
+                            CatalogRow row;
+                            row.addonName    = addon.manifest.name;
+                            row.catalogName  = cat.name.empty() ? cat.id : cat.name;
+                            row.type         = cat.type;
+                            row.catalogId    = cat.id;
+                            row.transportUrl = addon.transportUrl;
 
-                    CatalogResponse resp;
-                    if (m_client.fetchCatalog(addon.manifest, cat.type, cat.id, 0, resp)) {
-                        row.items = std::move(resp.metas);
-                    }
-                    if (!row.items.empty()) {
-                        rows.push_back(std::move(row));
+                            CatalogResponse resp;
+                            if (m_client.fetchCatalog(addon.manifest, cat.type, cat.id, 0, resp)) {
+                                row.items = std::move(resp.metas);
+                            }
+                            return row;
+                        }));
+                }
+                RowVec rows;
+                for (auto& cf : catFutures) {
+                    auto r = cf.get();
+                    if (!r.items.empty()) {
+                        rows.push_back(std::move(r));
                     }
                 }
                 return rows;

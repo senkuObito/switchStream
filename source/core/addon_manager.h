@@ -37,6 +37,9 @@ public:
     // Install addon by transport URL (fetches manifest)
     bool installAddon(const std::string& transportUrl);
 
+    // Directly register an addon without blocking on network manifest fetch
+    void addAddon(const InstalledAddon& addon);
+
     // Remove addon by ID
     void removeAddon(const std::string& addonId);
 

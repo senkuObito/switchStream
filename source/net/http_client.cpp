@@ -84,8 +84,8 @@ HttpResponse HttpClient::get(const std::string& url, int timeout_s) {
     return response;
 }
 
-HttpResponse HttpClient::downloadBytes(const std::string& url) {
-    return get(url);
+HttpResponse HttpClient::downloadBytes(const std::string& url, int timeout_s) {
+    return get(url, timeout_s > 0 ? timeout_s : 10);
 }
 
 } // namespace ss

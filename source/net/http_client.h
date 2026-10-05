@@ -29,8 +29,8 @@ public:
     // timeout_s: per-request override (0 = use default 60s)
     HttpResponse get(const std::string& url, int timeout_s = 0);
 
-    // Download binary data (for images) into a buffer
-    HttpResponse downloadBytes(const std::string& url);
+    // Download binary data (for images) into a buffer with 10s default timeout
+    HttpResponse downloadBytes(const std::string& url, int timeout_s = 10);
 
     // Signal all in-flight requests to abort immediately
     void cancel() { m_cancelled.store(true,  std::memory_order_relaxed); }
