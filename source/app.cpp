@@ -56,30 +56,25 @@ struct DiscoverAddon {
 };
 
 static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
-    // --- Catalog Addons (provide home page content + search) ---
+    // --- Catalog & Streaming Addons (provide home content & streams) ---
     {"Cinemeta", "The official addon for movie and series catalogs & search.", "https://v3-cinemeta.strem.io/manifest.json"},
-    {"yastream", "Stream Asian dramas, series and movies directly with multiple providers.", "https://yastream.tamthai.de/manifest.json"},
-    {"K-Drama Crush", "Asian and Korean drama catalog (drama feeds).", "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json"},
+    {"yastream", "Asian dramas, series & movies catalog with direct HTTP streaming.", "https://yastream.tamthai.de/manifest.json"},
+    {"K-Drama Crush", "Asian and Korean drama catalog (curated feeds & latest titles).", "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json"},
     {"Streaming Catalogs", "Trending movies & series from Netflix, HBO Max, Disney+, Prime Video, Apple TV+.", "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json"},
-    {"IndiaStreams", "Trending movies and shows from Indian platforms (Tamil, Hindi, etc.).", "https://indiastreams.rdata.in/manifest.json"},
-    {"Indian Regional Catalog", "Indian regional movies catalog by language (Tamil, Telugu, Hindi).", "https://83e20802dcf1-indian-streams.baby-beamup.club/manifest.json"},
-    {"TMDB Collections", "Movie collections grouped by franchise.", "https://61ab9c85a149-tmdb-collections.baby-beamup.club/manifest.json"},
-    {"Dramayo", "Asian dramas, series and movies catalog & streams.", "https://dramayo.stream/manifest.json"},
+    {"Dramayo", "Asian dramas, anime, series and movies catalog & streaming access.", "https://dramayo.stream/manifest.json"},
+    {"IndiaStreams", "Trending movies and shows from Indian platforms (Tamil, Hindi, Telugu).", "https://indiastreams.rdata.in/manifest.json"},
+    {"Indian Regional Catalog", "Indian regional movies catalog by language (Tamil, Telugu, Hindi, Malayalam).", "https://83e20802dcf1-indian-streams.baby-beamup.club/manifest.json"},
+    {"TMDB Collections", "Movie collections and sagas grouped by franchise.", "https://61ab9c85a149-tmdb-collections.baby-beamup.club/manifest.json"},
     {"AnimeStream", "Anime streaming catalog and metadata provider.", "https://animestream-addon.keypop3750.workers.dev/manifest.json"},
 
-    // --- Stream Addons (provide playable stream links) ---
-    {"Torrentio", "Torrent streams from YTS, RARBG, 1337x, etc.", "https://torrentio.strem.fun/manifest.json"},
+    // --- Stream Scrapers & Providers (provide playable stream links) ---
+    {"TorrentsDB", "Multi-tracker torrent search supporting Indian (1TamilMV, TamilBlasters) & global sources.", "https://torrentsdb.com/manifest.json"},
+    {"Torrentio", "Torrent streams from YTS, RARBG, 1337x, ThePirateBay, KickassTorrents, etc.", "https://torrentio.strem.fun/manifest.json"},
     {"Filtorrent", "Curated & shaped Torrentio + TorrentsDB streams with resolution filtering.", "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json"},
-    {"InMax", "Indian and regional movies & series streams from TamilMV / TamilBlasters.", "https://inmax-tmv.onrender.com/manifest.json"},
-    {"IndTorrents", "Indian torrent streams for regional movies and series.", "https://indtorrents.codecrafts.workers.dev/manifest.json"},
     {"ThePirateBay+", "ThePirateBay+ torrent streams provider.", "https://thepiratebay-plus.strem.fun/manifest.json"},
-    {"TorrentsDB", "TorrentsDB multi-tracker torrent stream search.", "https://torrentsdb.com/manifest.json"},
-    {"StreamViX | ElfHosted", "StreamViX multi-source HTTP streams provider.", "https://streamvix.hayd.uk/manifest.json"},
-    {"NoDebrid", "Direct HTTP/HLS streams without requiring Debrid subscriptions.", "https://nodebrid.fly.dev/manifest.json"},
-    {"Flix Streams", "HTTP streams from multiple sources.", "https://flixnest.app/flix-streams/manifest.json"},
+    {"InMax", "Indian and regional movies & series streams from TamilMV / TamilBlasters.", "https://inmax-tmv.onrender.com/manifest.json"},
     {"MovieBox", "HTTP streams for movies and series.", "https://moviebox-cfa7.onrender.com/manifest.json"},
-    {"Sword Watch", "HTTP streams (currently offline - Vercel deployment disabled).", "https://sword-watch.vercel.app/manifest.json"},
-    {"Comet | ElfHosted", "Fast torrent/debrid stream search.", "https://comet.elfhosted.com/manifest.json"},
+    {"Flix Streams", "HTTP streams from multiple web sources.", "https://flixnest.app/flix-streams/manifest.json"},
     {"KnightCrawler", "Alternative torrent and debrid stream search.", "https://knightcrawler.elfhosted.com/manifest.json"},
     {"Debrid Search", "Search and stream files directly from your Debrid torrent cloud cache.", "https://debrid-search.strem.fun/manifest.json"},
     {"YouTube", "Watch YouTube content directly.", "https://youtube-v2.strem.fun/manifest.json"},
@@ -211,18 +206,16 @@ bool App::init() {
     {
         const std::vector<std::string> defaultAddons = {
             "https://v3-cinemeta.strem.io/manifest.json",
+            "https://torrentsdb.com/manifest.json",
             "https://torrentio.strem.fun/manifest.json",
             "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
             "https://dramayo.stream/manifest.json",
             "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json",
             "https://yastream.tamthai.de/manifest.json",
             "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
-            "https://free.flixnest.app/manifest.json",
+            "https://indiastreams.rdata.in/manifest.json",
             "https://opensubtitles-v3.strem.io/manifest.json",
-            "https://watchhub.strem.io/manifest.json",
-            "https://stremio.yukistreams.xyz/manifest.json",
-            "https://sword-watch.vercel.app/manifest.json",
-            "https://nagare.nexioapp.org/manifest.json"
+            "https://watchhub.strem.io/manifest.json"
         };
         bool updatedAddons = false;
 
@@ -243,8 +236,13 @@ bool App::init() {
             bool isMorpheus = (tUrl.find("morpheus") != std::string::npos || aName.find("morpheus") != std::string::npos || aId.find("morpheus") != std::string::npos);
             bool isStreamAsia = (tUrl.find("streamasia") != std::string::npos || tUrl.find("dramacool") != std::string::npos || aId.find("streamasia") != std::string::npos);
             bool isCyberflix = (tUrl.find("cyberflix") != std::string::npos || aId.find("cyberflix") != std::string::npos);
+            bool isComet = (tUrl.find("comet") != std::string::npos || aName.find("comet") != std::string::npos || aId.find("comet") != std::string::npos);
+            bool isSwordWatch = (tUrl.find("sword-watch") != std::string::npos || aName.find("sword watch") != std::string::npos || aId.find("swordwatch") != std::string::npos);
+            bool isNoDebrid = (tUrl.find("nodebrid") != std::string::npos || aName.find("nodebrid") != std::string::npos || aId.find("nodebrid") != std::string::npos);
+            bool isStreamVix = (tUrl.find("streamvix") != std::string::npos || aName.find("streamvix") != std::string::npos || aId.find("streamvix") != std::string::npos);
 
-            if (isPengu || isKitsu || isAio || isMediaFusion || isNebula || isMorpheus || isStreamAsia || isCyberflix) {
+            if (isPengu || isKitsu || isAio || isMediaFusion || isNebula || isMorpheus || isStreamAsia || isCyberflix ||
+                isComet || isSwordWatch || isNoDebrid || isStreamVix) {
                 printf("[App] Removing deprecated/offline addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
                 m_addonManager.removeAddon(a.transportUrl);
                 m_addonManager.removeAddon(a.manifest.id);
@@ -704,6 +702,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
             if (m_homeRowIndex < (int)localCatalogs.size() &&
                 m_homeColIndex < (int)localCatalogs[m_homeRowIndex].items.size()) {
                 auto& item = localCatalogs[m_homeRowIndex].items[m_homeColIndex];
+                m_detailMeta = item;
                 loadDetail(item.type, item.id);
                 m_screen = Screen::DETAIL;
             }
@@ -750,6 +749,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
             m_searchIndex = (int)m_searchResults.size() - 1;
         if (kDown & HidNpadButton_A && !m_searchResults.empty()) {
             auto& item = m_searchResults[m_searchIndex];
+            m_detailMeta = item;
             loadDetail(item.type, item.id);
             m_screen = Screen::DETAIL;
         }
@@ -1621,6 +1621,7 @@ void App::handleTouch(int x, int y) {
                     auto& item = row.items[c];
                     m_homeRowIndex = r;
                     m_homeColIndex = c;
+                    m_detailMeta = item;
                     loadDetail(item.type, item.id);
                     m_screen = Screen::DETAIL;
                     return;
@@ -1681,6 +1682,7 @@ void App::handleTouch(int x, int y) {
         for (int i = startIdx; i < (int)localResults.size() && i < startIdx + maxVisible; i++) {
             if (x >= 30 && x <= SCREEN_W - 30 && y >= itemY - 2 && y <= itemY + 44) {
                 m_searchIndex = i;
+                m_detailMeta = localResults[i];
                 loadDetail(localResults[i].type, localResults[i].id);
                 m_screen = Screen::DETAIL;
                 return;
@@ -4168,7 +4170,12 @@ void App::renderAddons() {
 
     int tab3X = navX + 332, tab3W = 110;
     drawFilledRoundRect(tab3X, navY + 4, tab3W, navH - 8, 16, ACCENT);
-    drawTextCentered("Addons", tab3X + tab3W / 2, navY + 9, {10, 14, 22, 255}, m_fontNormal);
+    int pzX = tab3X + 14, pzY = navY + 12;
+    drawFilledRect(pzX, pzY, 6, 6, {10, 14, 22, 255});
+    drawFilledRect(pzX + 8, pzY, 6, 6, {10, 14, 22, 255});
+    drawFilledRect(pzX, pzY + 8, 6, 6, {10, 14, 22, 255});
+    drawFilledRect(pzX + 8, pzY + 8, 6, 6, {10, 14, 22, 255});
+    drawText("Addons", tab3X + 35, navY + 9, {10, 14, 22, 255}, m_fontNormal);
 
     int tab4X = navX + 446, tab4W = 126;
     drawTextCentered("Settings [X]", tab4X + tab4W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
@@ -4268,36 +4275,28 @@ void App::renderAddons() {
                 }
             }
 
-            // Avatar theme color & badge text
-            SDL_Color avBg = {34, 44, 64, 255};
-            SDL_Color avBd = {68, 88, 128, 200};
-            std::string avText = "EXT";
-
-            std::string lowName = name;
-            for (char& ch : lowName) ch = (char)tolower((unsigned char)ch);
-
-            if (lowName.find("cinemeta") != std::string::npos) {
-                avBg = {26, 52, 96, 255}; avBd = {48, 105, 195, 200}; avText = "CAT";
-            } else if (lowName.find("yastream") != std::string::npos) {
-                avBg = {22, 58, 42, 255}; avBd = {42, 138, 88, 200}; avText = "YA";
-            } else if (lowName.find("kdrama") != std::string::npos || lowName.find("k-drama") != std::string::npos) {
-                avBg = {88, 28, 58, 255}; avBd = {176, 58, 118, 200}; avText = "KD";
-            } else if (lowName.find("torrent") != std::string::npos) {
-                avBg = {16, 58, 72, 255}; avBd = {28, 138, 158, 200}; avText = "TOR";
-            } else if (lowName.find("subtitle") != std::string::npos || lowName.find("opensub") != std::string::npos) {
-                avBg = {74, 64, 24, 255}; avBd = {158, 138, 48, 200}; avText = "SUB";
-            } else if (lowName.find("streaming") != std::string::npos || lowName.find("netflix") != std::string::npos) {
-                avBg = {80, 24, 34, 255}; avBd = {160, 48, 68, 200}; avText = "STR";
-            } else if (catLabel.find("Torrent") != std::string::npos) {
-                avBg = {16, 58, 72, 255}; avBd = {28, 138, 158, 200}; avText = "TOR";
-            } else if (catLabel.find("Stream") != std::string::npos) {
-                avBg = {22, 58, 42, 255}; avBd = {42, 138, 88, 200}; avText = "STR";
+            // Avatar Icon (Custom vector icon or cached logo image)
+            int avX = x + 16, avY = y + 16, avSize = 54;
+            std::string logoUrl = "";
+            if (m_addonTab == 0) {
+                logoUrl = addons[i].manifest.logo;
             }
-
-            int avX = x + 16, avY = y + 16, avW = 54, avH = 54;
-            drawFilledRoundRect(avX, avY, avW, avH, 12, avBg);
-            drawRoundRect(avX, avY, avW, avH, 12, avBd);
-            drawTextCentered(avText, avX + avW / 2, avY + 16, {255, 255, 255, 255}, m_fontNormal);
+            SDL_Texture* logoTex = nullptr;
+            if (m_imageCache && !logoUrl.empty()) {
+                logoTex = m_imageCache->get(logoUrl);
+                if (!logoTex) {
+                    std::lock_guard<std::mutex> lock(m_downloadQueueMutex);
+                    bool found = false;
+                    for (const auto& job : m_downloadQueue) {
+                        if (job.url == logoUrl) { found = true; break; }
+                    }
+                    if (!found) {
+                        m_downloadQueue.push_back({logoUrl, ""});
+                        m_downloadQueueCV.notify_one();
+                    }
+                }
+            }
+            drawAddonIcon(avX, avY, avSize, name, catLabel, logoTex);
 
             // Title & Category
             int textX = x + 80;
@@ -4334,8 +4333,20 @@ void App::renderAddons() {
                 }
             }
 
-            // Description
-            drawTextWrapped(desc, x + 16, y + 80, cardW - 32, {175, 182, 195, 255}, m_fontSmall);
+            // Description — clean newlines, truncate cleanly to 135 chars, and wrap within card bounds (max 3-4 lines)
+            std::string cardDesc = desc;
+            for (char& ch : cardDesc) {
+                if (ch == '\r' || ch == '\n' || ch == '\t') ch = ' ';
+            }
+            if (cardDesc.size() > 140) {
+                size_t cut = cardDesc.rfind(' ', 135);
+                if (cut != std::string::npos && cut > 80) {
+                    cardDesc = cardDesc.substr(0, cut) + "...";
+                } else {
+                    cardDesc = cardDesc.substr(0, 135) + "...";
+                }
+            }
+            drawTextWrapped(cardDesc, x + 16, y + 78, cardW - 32, {175, 182, 195, 255}, m_fontSmall, 105);
 
             // Bottom Action Pill
             int btnY = y + cardH - 42;
@@ -4667,18 +4678,18 @@ void App::renderResourceHUD() {
     }
 
     int hudW = (int)hudStr.size() * 7 + 24;
-    int hudH = 26;
-    int hudX = SCREEN_W - hudW - 135; // Positioned left of Exit button
-    int hudY = 21;
+    int hudH = 24;
+    int hudX = SCREEN_W - hudW - 24;
+    int hudY = SCREEN_H - 31; // Centered inside the 38px bottom navbar
 
     if (m_screen == Screen::PLAYER) {
-        hudX = SCREEN_W - hudW - 30;
-        hudY = 24;
+        hudX = SCREEN_W - hudW - 24;
+        hudY = SCREEN_H - 31;
     }
 
-    drawFilledRoundRect(hudX, hudY, hudW, hudH, 13, {18, 24, 38, 235});
-    drawRoundRect(hudX, hudY, hudW, hudH, 13, {40, 160, 200, 140});
-    drawTextCentered(hudStr, hudX + hudW / 2, hudY + 4, {225, 240, 255, 255}, m_fontSmall);
+    drawFilledRoundRect(hudX, hudY, hudW, hudH, 12, {18, 24, 38, 225});
+    drawRoundRect(hudX, hudY, hudW, hudH, 12, {40, 160, 200, 140});
+    drawTextCentered(hudStr, hudX + hudW / 2, hudY + 3, {225, 240, 255, 255}, m_fontSmall);
 }
 
 void App::drawNavBar() {
@@ -4808,18 +4819,167 @@ void App::drawTextCentered(const std::string& text, int cx, int y,
 }
 
 int App::drawTextWrapped(const std::string& text, int x, int y, int wrapWidth,
-                         SDL_Color color, TTF_Font* font) {
+                         SDL_Color color, TTF_Font* font, int maxHeight) {
     if (text.empty()) return 0;
     TTF_Font* f = font ? font : m_fontNormal;
     SDL_Surface* surface = TTF_RenderUTF8_Blended_Wrapped(f, text.c_str(), color, wrapWidth);
     if (!surface) return 0;
     int h = surface->h;
+    int renderH = (maxHeight > 0 && h > maxHeight) ? maxHeight : h;
     SDL_Texture* texture = SDL_CreateTextureFromSurface(m_renderer, surface);
-    SDL_Rect dst = {x, y, surface->w, h};
-    SDL_RenderCopy(m_renderer, texture, nullptr, &dst);
+    SDL_Rect src = {0, 0, surface->w, renderH};
+    SDL_Rect dst = {x, y, surface->w, renderH};
+    SDL_RenderCopy(m_renderer, texture, &src, &dst);
     SDL_DestroyTexture(texture);
     SDL_FreeSurface(surface);
-    return h;
+    return renderH;
+}
+
+void App::drawAddonIcon(int x, int y, int size, const std::string& name, const std::string& category, SDL_Texture* logoTex) {
+    if (logoTex) {
+        drawFilledRoundRect(x, y, size, size, 12, {24, 30, 44, 255});
+        drawRoundRect(x, y, size, size, 12, {60, 75, 105, 200});
+        SDL_Rect dst = {x + 5, y + 5, size - 10, size - 10};
+        SDL_RenderCopy(m_renderer, logoTex, nullptr, &dst);
+        return;
+    }
+
+    std::string low = name + " " + category;
+    for (char& c : low) c = (char)tolower((unsigned char)c);
+
+    int cx = x + size / 2;
+    int cy = y + size / 2;
+
+    if (low.find("torrent") != std::string::npos || low.find("magnet") != std::string::npos) {
+        // --- Horseshoe Magnet Icon (like Torrentio in mockup) ---
+        drawFilledRoundRect(x, y, size, size, 12, {16, 52, 60, 255});
+        drawRoundRect(x, y, size, size, 12, {30, 140, 155, 200});
+
+        // Magnet legs (Red)
+        SDL_Color magRed = {235, 65, 65, 255};
+        drawFilledRect(cx - 15, cy - 8, 8, 14, magRed); // Left leg
+        drawFilledRect(cx + 7, cy - 8, 8, 14, magRed);  // Right leg
+        // Magnet U-bend bottom
+        drawFilledRoundRect(cx - 15, cy - 2, 30, 16, 8, magRed);
+        // Cut out inner hole of the U
+        drawFilledRoundRect(cx - 7, cy - 2, 14, 10, 4, {16, 52, 60, 255});
+
+        // Silver pole tips
+        SDL_Color silver = {225, 235, 245, 255};
+        drawFilledRect(cx - 15, cy - 14, 8, 6, silver);
+        drawFilledRect(cx + 7, cy - 14, 8, 6, silver);
+
+        // Magnetic spark dots/arcs (Cyan)
+        SDL_Color spark = {0, 229, 255, 240};
+        drawFilledRect(cx - 13, cy - 19, 4, 3, spark);
+        drawFilledRect(cx + 9, cy - 19, 4, 3, spark);
+        drawFilledRect(cx - 2, cy - 21, 4, 3, spark);
+    }
+    else if (low.find("cinemeta") != std::string::npos || (low.find("catalog") != std::string::npos && low.find("sub") == std::string::npos && low.find("asian") == std::string::npos && low.find("k-drama") == std::string::npos && low.find("kdrama") == std::string::npos)) {
+        // --- Film Reel & Popcorn Bucket (like Cinemeta in mockup) ---
+        drawFilledRoundRect(x, y, size, size, 12, {24, 46, 88, 255});
+        drawRoundRect(x, y, size, size, 12, {45, 95, 185, 200});
+
+        // Film Reel (Circular body)
+        SDL_Color reelColor = {75, 125, 210, 255};
+        drawFilledRoundRect(cx - 18, cy - 15, 22, 22, 11, reelColor);
+        drawFilledRoundRect(cx - 12, cy - 9, 10, 10, 5, {24, 46, 88, 255});
+        // Reel perforations
+        drawFilledRect(cx - 17, cy - 6, 3, 4, {24, 46, 88, 255});
+        drawFilledRect(cx - 2, cy - 6, 3, 4, {24, 46, 88, 255});
+        drawFilledRect(cx - 9, cy - 14, 4, 3, {24, 46, 88, 255});
+        drawFilledRect(cx - 9, cy + 2, 4, 3, {24, 46, 88, 255});
+
+        // Popcorn bucket (Red and white stripes)
+        drawFilledRect(cx + 2, cy - 6, 15, 19, {230, 50, 50, 255});
+        drawFilledRect(cx + 6, cy - 6, 3, 19, {250, 250, 250, 255});
+        drawFilledRect(cx + 12, cy - 6, 3, 19, {250, 250, 250, 255});
+        // Popcorn puffs on top
+        SDL_Color corn = {255, 220, 75, 255};
+        drawFilledRoundRect(cx + 1, cy - 12, 7, 7, 3, corn);
+        drawFilledRoundRect(cx + 6, cy - 15, 8, 8, 4, corn);
+        drawFilledRoundRect(cx + 12, cy - 11, 7, 7, 3, corn);
+    }
+    else if (low.find("yastream") != std::string::npos || low.find("drama") != std::string::npos || low.find("asian") != std::string::npos) {
+        if (low.find("kdrama") != std::string::npos || low.find("k-drama") != std::string::npos || low.find("crush") != std::string::npos) {
+            // --- Heart Icon (like K-Drama Crush in mockup) ---
+            drawFilledRoundRect(x, y, size, size, 12, {85, 25, 55, 255});
+            drawRoundRect(x, y, size, size, 12, {180, 55, 115, 200});
+
+            SDL_Color heart = {255, 65, 120, 255};
+            drawFilledRoundRect(cx - 14, cy - 12, 14, 14, 7, heart);
+            drawFilledRoundRect(cx, cy - 12, 14, 14, 7, heart);
+            // Lower triangle
+            for (int row = 0; row < 14; ++row) {
+                int hw = 14 - row;
+                drawFilledRect(cx - hw, cy - 2 + row, hw * 2, 1, heart);
+            }
+        } else {
+            // --- Pagoda Temple Silhouette (like yastream in mockup) ---
+            drawFilledRoundRect(x, y, size, size, 12, {22, 58, 42, 255});
+            drawRoundRect(x, y, size, size, 12, {42, 140, 88, 200});
+
+            SDL_Color gold = {235, 195, 75, 255};
+            // Top roof eave (curved tips)
+            drawFilledRect(cx - 16, cy - 12, 32, 4, gold);
+            drawFilledRect(cx - 18, cy - 14, 4, 3, gold);
+            drawFilledRect(cx + 14, cy - 14, 4, 3, gold);
+            // Mid roof eave
+            drawFilledRect(cx - 14, cy - 4, 28, 4, gold);
+            drawFilledRect(cx - 16, cy - 6, 4, 3, gold);
+            drawFilledRect(cx + 12, cy - 6, 4, 3, gold);
+            // Pillars
+            drawFilledRect(cx - 10, cy, 4, 12, gold);
+            drawFilledRect(cx + 6, cy, 4, 12, gold);
+            // Base foundation
+            drawFilledRect(cx - 14, cy + 12, 28, 3, gold);
+        }
+    }
+    else if (low.find("sub") != std::string::npos || low.find("opensub") != std::string::npos) {
+        // --- Speech Bubble / Subtitles CC Icon (like OpenSubtitles in mockup) ---
+        drawFilledRoundRect(x, y, size, size, 12, {70, 60, 22, 255});
+        drawRoundRect(x, y, size, size, 12, {160, 138, 45, 200});
+
+        SDL_Color subBg = {240, 215, 120, 255};
+        drawFilledRoundRect(cx - 16, cy - 12, 32, 22, 6, subBg);
+        // Bubble pointer tail
+        drawFilledRect(cx - 10, cy + 10, 6, 4, subBg);
+        drawFilledRect(cx - 13, cy + 12, 4, 2, subBg);
+
+        // Subtitle line bars inside
+        drawFilledRect(cx - 11, cy - 6, 22, 3, {40, 32, 10, 255});
+        drawFilledRect(cx - 11, cy, 15, 3, {40, 32, 10, 255});
+    }
+    else if (low.find("stream") != std::string::npos || low.find("flix") != std::string::npos || low.find("movie") != std::string::npos) {
+        // --- Monitor with Play Button ---
+        drawFilledRoundRect(x, y, size, size, 12, {24, 38, 62, 255});
+        drawRoundRect(x, y, size, size, 12, {50, 95, 160, 200});
+
+        // TV / Screen
+        drawFilledRoundRect(cx - 17, cy - 13, 34, 23, 4, {36, 52, 85, 255});
+        drawRoundRect(cx - 17, cy - 13, 34, 23, 4, {70, 120, 200, 255});
+        // Stand
+        drawFilledRect(cx - 3, cy + 10, 6, 4, {70, 120, 200, 255});
+        drawFilledRect(cx - 8, cy + 14, 16, 2, {70, 120, 200, 255});
+
+        // Green/Cyan Play Triangle
+        SDL_Color playCol = {0, 229, 255, 255};
+        for (int p = 0; p < 8; ++p) {
+            drawFilledRect(cx - 4 + p, cy - 7 + p, 2, 14 - p * 2, playCol);
+        }
+    }
+    else {
+        // --- Interlocking Puzzle Piece / Extension Icon ---
+        drawFilledRoundRect(x, y, size, size, 12, {34, 44, 64, 255});
+        drawRoundRect(x, y, size, size, 12, {68, 88, 128, 200});
+
+        SDL_Color puz = {130, 165, 225, 255};
+        drawFilledRoundRect(cx - 11, cy - 11, 22, 22, 4, puz);
+        // Top tab
+        drawFilledRoundRect(cx - 4, cy - 16, 8, 7, 3, puz);
+        // Right tab
+        drawFilledRoundRect(cx + 9, cy - 4, 7, 8, 3, puz);
+    }
 }
 
 void App::drawRect(int x, int y, int w, int h, SDL_Color color) {
@@ -5443,8 +5603,23 @@ void App::detailWorkerLoop() {
         if (task == 1) { // Meta + Streams (Movies/Series)
             MetaResponse resp;
             MetaItem loadedMeta;
+            {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                loadedMeta = m_detailMeta;
+            }
             if (m_addonManager.getMeta(type, id, resp)) {
-                loadedMeta = resp.meta;
+                if (!resp.meta.id.empty()) loadedMeta.id = resp.meta.id;
+                if (!resp.meta.type.empty()) loadedMeta.type = resp.meta.type;
+                if (!resp.meta.name.empty()) loadedMeta.name = resp.meta.name;
+                if (!resp.meta.poster.empty()) loadedMeta.poster = resp.meta.poster;
+                if (!resp.meta.background.empty()) loadedMeta.background = resp.meta.background;
+                if (!resp.meta.description.empty()) loadedMeta.description = resp.meta.description;
+                if (!resp.meta.releaseInfo.empty()) loadedMeta.releaseInfo = resp.meta.releaseInfo;
+                if (!resp.meta.runtime.empty()) loadedMeta.runtime = resp.meta.runtime;
+                if (!resp.meta.imdbRating.empty()) loadedMeta.imdbRating = resp.meta.imdbRating;
+                if (!resp.meta.genres.empty()) loadedMeta.genres = resp.meta.genres;
+                if (!resp.meta.cast.empty()) loadedMeta.cast = resp.meta.cast;
+                if (!resp.meta.videos.empty()) loadedMeta.videos = resp.meta.videos;
             }
 
             if (!loadedMeta.videos.empty()) {
@@ -5679,9 +5854,12 @@ void App::loadDetail(const std::string& type, const std::string& id) {
         m_detailEpisodes.clear();
         m_detailFocus = DetailFocus::STREAMS;
         currentGen = ++m_detailGeneration;
+        if (m_detailMeta.id != id) {
+            m_detailMeta = MetaItem();
+            m_detailMeta.id = id;
+            m_detailMeta.type = type;
+        }
     }
-
-    m_detailMeta = MetaItem(); // clear old
 
     {
         std::lock_guard<std::mutex> lock(m_workerMutex);

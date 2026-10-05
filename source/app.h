@@ -50,7 +50,8 @@ private:
     void drawTextCentered(const std::string& text, int cx, int y,
                           SDL_Color color = {255,255,255,255}, TTF_Font* font = nullptr);
     int drawTextWrapped(const std::string& text, int x, int y, int wrapWidth,
-                        SDL_Color color = {255,255,255,255}, TTF_Font* font = nullptr);
+                        SDL_Color color = {255,255,255,255}, TTF_Font* font = nullptr, int maxHeight = 0);
+    void drawAddonIcon(int x, int y, int size, const std::string& name, const std::string& category, SDL_Texture* logoTex = nullptr);
     void drawRect(int x, int y, int w, int h, SDL_Color color);
     void drawFilledRect(int x, int y, int w, int h, SDL_Color color);
     void drawRoundRect(int x, int y, int w, int h, int r, SDL_Color color);

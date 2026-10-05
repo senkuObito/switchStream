@@ -131,7 +131,7 @@ private:
     std::string m_torrserverHost = "http://127.0.0.1:8090";
     bool m_hwDecode = true;
     std::string m_subtitleLang = "en";
-    bool m_enableTorrents = false; // Default: false (completely independent streaming by default)
+    bool m_enableTorrents = true; // Default: true (out-of-the-box streaming support)
     bool m_suppressStreamAddonWarning = false;
     bool m_showResourceMonitor = false;
     bool m_showRamUsage = true;

@@ -57,7 +57,7 @@ bool AddonManager::loadConfig(const std::string& configPath) {
     if (doc.HasMember("enable_torrents") && doc["enable_torrents"].IsBool()) {
         m_enableTorrents = doc["enable_torrents"].GetBool();
     } else {
-        m_enableTorrents = false;
+        m_enableTorrents = true;
     }
 
     if (doc.HasMember("suppress_stream_warning") && doc["suppress_stream_warning"].IsBool()) {
@@ -86,6 +86,23 @@ bool AddonManager::loadConfig(const std::string& configPath) {
         for (auto& a : doc["addons"].GetArray()) {
             if (!a.IsObject() || !a.HasMember("url")) continue;
             std::string url = a["url"].GetString();
+            std::string lowUrl = url;
+            for (char& c : lowUrl) c = (char)tolower((unsigned char)c);
+            if (lowUrl.find("comet") != std::string::npos ||
+                lowUrl.find("sword-watch") != std::string::npos ||
+                lowUrl.find("nodebrid.fly.dev") != std::string::npos) {
+                continue; // Skip deprecated / requested removed addons
+            }
+
+            std::string addonId = (a.HasMember("id") && a["id"].IsString()) ? a["id"].GetString() : "";
+            std::string lowId = addonId;
+            for (char& c : lowId) c = (char)tolower((unsigned char)c);
+            if (lowId.find("comet") != std::string::npos ||
+                lowId.find("swordwatch") != std::string::npos ||
+                lowId.find("nodebrid") != std::string::npos) {
+                continue;
+            }
+
             bool enabled = true;
             if (a.HasMember("enabled") && a["enabled"].IsBool())
                 enabled = a["enabled"].GetBool();
@@ -96,8 +113,8 @@ bool AddonManager::loadConfig(const std::string& configPath) {
             if (a.HasMember("name") && a["name"].IsString()) {
                 addon.manifest.name = a["name"].GetString();
             }
-            if (a.HasMember("id") && a["id"].IsString()) {
-                addon.manifest.id = a["id"].GetString();
+            if (!addonId.empty()) {
+                addon.manifest.id = addonId;
             }
             if (a.HasMember("description") && a["description"].IsString()) {
                 addon.manifest.description = a["description"].GetString();
@@ -409,6 +426,7 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
             for (auto& t : res.types) {
                 if (t == type) { typeMatch = true; break; }
                 if (type == "anime" && (t == "series" || t == "movie")) { typeMatch = true; break; }
+                if ((type == "series" || type == "movie") && t == "anime") { typeMatch = true; break; }
             }
             if (!typeMatch) continue;
         }
@@ -426,7 +444,12 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
                     break;
                 }
             }
-            if (!prefixMatch) continue;
+            // If the addon has its own catalogs and we are querying streams for its items,
+            // don't reject it just because it didn't list every sub-prefix in idPrefixes
+            if (!prefixMatch) {
+                bool hasOwnCatalogs = !addon.manifest.catalogs.empty();
+                if (!hasOwnCatalogs) continue;
+            }
         }
 
         return true;
@@ -802,20 +825,31 @@ std::string AddonManager::getAddonFallbackId(const std::string& url) {
 }
 
 std::string AddonManager::getAddonCategoryBadge(const InstalledAddon& addon) {
+    bool hasStream = false;
+    bool hasCatalog = !addon.manifest.catalogs.empty();
+    bool hasSubtitles = false;
+
     for (const auto& r : addon.manifest.resources) {
-        if (r.name == "stream") return "[Stream]";
+        if (r.name == "stream") hasStream = true;
+        if (r.name == "catalog") hasCatalog = true;
+        if (r.name == "subtitles") hasSubtitles = true;
     }
-    for (const auto& r : addon.manifest.resources) {
-        if (r.name == "subtitles") return "[Subtitles]";
-    }
-    if (!addon.manifest.catalogs.empty()) return "[Catalog]";
+
+    if (hasCatalog && hasStream) return "[Catalog & Stream]";
+    if (hasStream) return "[Stream Provider]";
+    if (hasCatalog) return "[Catalog Provider]";
+    if (hasSubtitles) return "[Subtitles Provider]";
 
     // Fallback based on URL or ID
     std::string low = addon.transportUrl + " " + addon.manifest.id + " " + addon.manifest.name;
     for (char& c : low) c = (char)tolower((unsigned char)c);
-    if (low.find("opensubtitles") != std::string::npos || low.find("subtitle") != std::string::npos) return "[Subtitles]";
-    if (low.find("torrent") != std::string::npos || low.find("stream") != std::string::npos || low.find("debrid") != std::string::npos) return "[Stream]";
-    if (low.find("catalog") != std::string::npos || low.find("meta") != std::string::npos || low.find("movie") != std::string::npos || low.find("series") != std::string::npos) return "[Catalog]";
+    if (low.find("opensubtitles") != std::string::npos || low.find("subtitle") != std::string::npos) return "[Subtitles Provider]";
+    if ((low.find("yastream") != std::string::npos || low.find("dramayo") != std::string::npos || low.find("animestream") != std::string::npos) &&
+        (low.find("catalog") != std::string::npos || low.find("stream") != std::string::npos)) {
+        return "[Catalog & Stream]";
+    }
+    if (low.find("torrent") != std::string::npos || low.find("stream") != std::string::npos || low.find("debrid") != std::string::npos) return "[Stream Provider]";
+    if (low.find("catalog") != std::string::npos || low.find("meta") != std::string::npos || low.find("movie") != std::string::npos || low.find("series") != std::string::npos) return "[Catalog Provider]";
     return "[Addon]";
 }
 
