@@ -628,6 +628,20 @@ void Player::setSubtitleTrack(int id) {
     }
 }
 
+bool Player::addSubtitle(const std::string& pathOrUrl, const std::string& title) {
+    if (!m_mpv) return false;
+    const char* cmd[] = {
+        "sub-add",
+        pathOrUrl.c_str(),
+        "select",
+        title.empty() ? nullptr : title.c_str(),
+        nullptr
+    };
+    int res = mpv_command(m_mpv, cmd);
+    printf("[Player] sub-add command returned: %d for path: %s\n", res, pathOrUrl.c_str());
+    return res >= 0;
+}
+
 std::vector<Player::AudioTrack> Player::getAudioTracks() {
     std::vector<AudioTrack> tracks;
     if (!m_mpv) return tracks;

@@ -674,6 +674,7 @@ void App::handleInputForPad(u64 kDown) {
                 
                 if (kDown & HidNpadButton_A && !currentSeasonEps.empty()) {
                     std::string epId = currentSeasonEps[m_detailEpisodeIndex].id;
+                    m_currentPlayingEpisodeId = epId;
                     m_detailEpisodeSelected = true;
                     m_detailStreams.clear();
                     m_detailStreamIndex = 0;
@@ -840,23 +841,62 @@ void App::handleInputForPad(u64 kDown) {
         if (kDown) {
             if (m_showSubList) {
                 m_osdShowTime = now;
-                auto tracks = m_player.getSubtitleTracks();
-                if (kDown & HidNpadButton_Up) {
-                    m_subListIndex = std::clamp(m_subListIndex - 1, 0, (int)tracks.size() - 1);
-                }
-                else if (kDown & HidNpadButton_Down) {
-                    m_subListIndex = std::clamp(m_subListIndex + 1, 0, (int)tracks.size() - 1);
-                }
-                else if (kDown & HidNpadButton_A) {
-                    if (!tracks.empty()) {
-                        m_player.setSubtitleTrack(tracks[m_subListIndex].id);
+                if (m_subAddonMode) {
+                    if (m_subAddonLoading.load()) {
+                        if (kDown & HidNpadButton_B) {
+                            cancelAddonSubtitle();
+                        }
+                    } else {
+                        std::vector<Subtitle> localSubs;
+                        {
+                            std::lock_guard<std::mutex> lock(m_subMutex);
+                            localSubs = m_addonSubtitles;
+                        }
+                        if (localSubs.empty()) {
+                            if (kDown & (HidNpadButton_B | HidNpadButton_A)) {
+                                cancelAddonSubtitle();
+                            }
+                        } else {
+                            if (kDown & HidNpadButton_Up) {
+                                m_subAddonIndex = std::clamp(m_subAddonIndex - 1, 0, (int)localSubs.size() - 1);
+                            }
+                            else if (kDown & HidNpadButton_Down) {
+                                m_subAddonIndex = std::clamp(m_subAddonIndex + 1, 0, (int)localSubs.size() - 1);
+                            }
+                            else if (kDown & HidNpadButton_A) {
+                                applyAddonSubtitle(localSubs[m_subAddonIndex]);
+                            }
+                            else if (kDown & HidNpadButton_B) {
+                                cancelAddonSubtitle();
+                            }
+                        }
                     }
-                    m_showSubList = false;
+                    break;
+                } else {
+                    auto tracks = m_player.getSubtitleTracks();
+                    int totalItems = 1 + (int)tracks.size();
+                    if (kDown & HidNpadButton_Up) {
+                        m_subListIndex = std::clamp(m_subListIndex - 1, 0, totalItems - 1);
+                    }
+                    else if (kDown & HidNpadButton_Down) {
+                        m_subListIndex = std::clamp(m_subListIndex + 1, 0, totalItems - 1);
+                    }
+                    else if (kDown & HidNpadButton_A) {
+                        if (m_subListIndex == 0) {
+                            fetchAddonSubtitles();
+                        } else {
+                            int trackIdx = m_subListIndex - 1;
+                            if (trackIdx >= 0 && trackIdx < (int)tracks.size()) {
+                                m_player.setSubtitleTrack(tracks[trackIdx].id);
+                            }
+                            m_showSubList = false;
+                        }
+                    }
+                    else if (kDown & HidNpadButton_B) {
+                        m_showSubList = false;
+                    }
+                    break;
                 }
-                else if (kDown & HidNpadButton_B) {
-                    m_showSubList = false;
-                }
-                break;
             }
             if (m_showAudioList) {
                 m_osdShowTime = now;
@@ -906,7 +946,12 @@ void App::handleInputForPad(u64 kDown) {
             if (kDown & HidNpadButton_B) {
                 // If a popup overlay menu is open, B closes that menu
                 if (m_showSubList || m_showAudioList || m_showQualityList) {
-                    m_showSubList = false;
+                    if (m_showSubList && m_subAddonMode) {
+                        cancelAddonSubtitle();
+                    } else {
+                        m_showSubList = false;
+                    }
+                    m_subAddonMode = false;
                     m_showAudioList = false;
                     m_showQualityList = false;
                     m_osdShowTime = now;
@@ -1295,6 +1340,7 @@ void App::handleTouch(int x, int y) {
 
                 if (x >= itemMinX && x <= itemMaxX && y >= itemMinY && y <= itemMaxY) {
                     std::string epId = localEpisodes[i].id;
+                    m_currentPlayingEpisodeId = epId;
                     {
                         std::lock_guard<std::mutex> lock(m_streamsMutex);
                         m_detailEpisodeIndex = i;
@@ -1544,20 +1590,76 @@ void App::handleTouch(int x, int y) {
 
         // 1. Check Subtitle / Audio list overlays touch events first
         if (m_showSubList) {
-            int subW = 480;
-            int subH = 400;
+            int subW = 560;
+            int subH = 430;
             int subX = SCREEN_W/2 - subW/2;
             int subY = SCREEN_H/2 - subH/2;
 
-            if (x >= subX && x <= subX + subW && y >= subY && y <= subY + subH) {
-                auto tracks = m_player.getSubtitleTracks();
+            if (x < subX || x > subX + subW || y < subY || y > subY + subH) {
+                // Click outside closes dialog
+                if (m_subAddonMode) {
+                    cancelAddonSubtitle();
+                } else {
+                    m_showSubList = false;
+                }
+                m_osdShowTime = now;
+                return;
+            }
+
+            if (m_subAddonMode) {
+                if (m_subAddonLoading.load()) {
+                    cancelAddonSubtitle();
+                    m_osdShowTime = now;
+                    return;
+                }
+
+                std::vector<Subtitle> localSubs;
+                {
+                    std::lock_guard<std::mutex> lock(m_subMutex);
+                    localSubs = m_addonSubtitles;
+                }
+
+                if (localSubs.empty()) {
+                    cancelAddonSubtitle();
+                    m_osdShowTime = now;
+                    return;
+                }
+
                 int maxVis = 6;
                 int startIdx = 0;
-                if (m_subListIndex >= maxVis) startIdx = m_subListIndex - maxVis + 1;
-                
-                int rowY = subY + 65;
+                if (m_subAddonIndex >= maxVis) startIdx = m_subAddonIndex - maxVis + 1;
+
+                int rowY = subY + 80;
+                for (int i = startIdx; i < (int)localSubs.size() && i < startIdx + maxVis; i++) {
+                    if (x >= subX + 24 && x <= subX + subW - 24 && y >= rowY && y <= rowY + 44) {
+                        m_subAddonIndex = i;
+                        applyAddonSubtitle(localSubs[i]);
+                        m_osdShowTime = now;
+                        return;
+                    }
+                    rowY += 50;
+                }
+            } else {
+                // Option 0: Add subtitle from addon button
+                int btnAddY = subY + 58;
+                if (x >= subX + 24 && x <= subX + subW - 24 && y >= btnAddY && y <= btnAddY + 44) {
+                    fetchAddonSubtitles();
+                    m_osdShowTime = now;
+                    return;
+                }
+
+                auto tracks = m_player.getSubtitleTracks();
+                int maxVis = 5;
+                int startIdx = 0;
+                if (m_subListIndex > 0) {
+                    int trackSelected = m_subListIndex - 1;
+                    if (trackSelected >= maxVis) startIdx = trackSelected - maxVis + 1;
+                }
+
+                int rowY = subY + 138;
                 for (int i = startIdx; i < (int)tracks.size() && i < startIdx + maxVis; i++) {
-                    if (x >= subX + 20 && x <= subX + subW - 20 && y >= rowY && y <= rowY + 42) {
+                    if (x >= subX + 24 && x <= subX + subW - 24 && y >= rowY && y <= rowY + 42) {
+                        m_subListIndex = 1 + i;
                         m_player.setSubtitleTrack(tracks[i].id);
                         m_showSubList = false;
                         printf("[Touch] Subtitle track %d selected via click\n", tracks[i].id);
@@ -1566,10 +1668,6 @@ void App::handleTouch(int x, int y) {
                     }
                     rowY += 48;
                 }
-            } else {
-                // Click outside closes the dialog
-                m_showSubList = false;
-                m_osdShowTime = now;
             }
             return;
         }
@@ -1843,6 +1941,106 @@ static std::string formatTime(double seconds) {
     return buf;
 }
 
+void App::fetchAddonSubtitles() {
+    m_wasPlayingBeforeSubSearch = !m_player.isPaused();
+    m_player.pause();
+    m_subAddonMode = true;
+    m_subAddonLoading = true;
+    {
+        std::lock_guard<std::mutex> lock(m_subMutex);
+        m_addonSubtitles.clear();
+    }
+    m_subAddonIndex = 0;
+
+    int currentGen = ++m_subSearchGen;
+    std::string type = m_currentPlayingType.empty() ? m_detailMeta.type : m_currentPlayingType;
+    std::string id = m_currentPlayingId.empty() ? m_detailMeta.id : m_currentPlayingId;
+    std::string title = m_detailMeta.name;
+
+    std::thread([this, type, id, title, currentGen]() {
+        printf("[Subtitles] Fetching addon subtitles for type='%s', id='%s', title='%s'\n",
+               type.c_str(), id.c_str(), title.c_str());
+
+        std::vector<Subtitle> subs = m_addonManager.getAllSubtitles(type, id);
+
+        // If no subtitles found and ID is not an IMDB ID (doesn't start with "tt"),
+        // try to resolve IMDB ID by searching Cinemeta with the media title!
+        if (subs.empty() && id.rfind("tt", 0) != 0 && !title.empty()) {
+            printf("[Subtitles] ID '%s' is not an IMDB id, searching Cinemeta for '%s'...\n",
+                   id.c_str(), title.c_str());
+            auto results = m_addonManager.search(title);
+            std::string imdbId;
+            for (const auto& r : results) {
+                if (r.id.rfind("tt", 0) == 0) {
+                    imdbId = r.id;
+                    break;
+                }
+            }
+            if (!imdbId.empty()) {
+                std::string targetId = imdbId;
+                if (type == "series") {
+                    int s = 1, e = 1;
+                    if (!m_detailEpisodes.empty() && m_detailEpisodeIndex < (int)m_detailEpisodes.size()) {
+                        s = m_detailEpisodes[m_detailEpisodeIndex].season;
+                        e = m_detailEpisodes[m_detailEpisodeIndex].episode;
+                        if (s <= 0) s = 1;
+                        if (e <= 0) e = 1;
+                    }
+                    targetId += ":" + std::to_string(s) + ":" + std::to_string(e);
+                }
+                printf("[Subtitles] Resolved IMDB ID: '%s', querying OpenSubtitles...\n", targetId.c_str());
+                subs = m_addonManager.getAllSubtitles(type, targetId);
+            }
+        }
+
+        if (m_subSearchGen.load() == currentGen) {
+            std::lock_guard<std::mutex> lock(m_subMutex);
+            m_addonSubtitles = std::move(subs);
+            m_subAddonLoading = false;
+            printf("[Subtitles] Found %zu addon subtitles\n", m_addonSubtitles.size());
+        }
+    }).detach();
+}
+
+void App::applyAddonSubtitle(const Subtitle& sub) {
+    printf("[Subtitles] Downloading & applying subtitle: %s (url: %s)\n",
+           sub.lang.c_str(), sub.url.c_str());
+
+    std::string subDir;
+#ifdef __SWITCH__
+    subDir = "sdmc:/switch/switchstream";
+#else
+    subDir = "switchstream_data";
+#endif
+    std::string subPath = subDir + "/addon_sub.srt";
+
+    auto resp = m_http.get(sub.url);
+    if (resp.ok() && !resp.body.empty()) {
+        FILE* f = fopen(subPath.c_str(), "wb");
+        if (f) {
+            fwrite(resp.body.data(), 1, resp.body.size(), f);
+            fclose(f);
+            m_player.addSubtitle(subPath, sub.lang);
+        } else {
+            m_player.addSubtitle(sub.url, sub.lang);
+        }
+    } else {
+        m_player.addSubtitle(sub.url, sub.lang);
+    }
+
+    m_subAddonMode = false;
+    m_showSubList = false;
+    m_player.resume();
+}
+
+void App::cancelAddonSubtitle() {
+    m_subSearchGen++;
+    m_subAddonLoading = false;
+    m_subAddonMode = false;
+    m_showSubList = false;
+    m_player.resume();
+}
+
 void App::renderPlayer() {
     double pos = m_player.getPosition();
     bool isNativeTorrent = TorrentStream::instance().isActive() || TorrentStream::instance().isOpening() || !m_lastPlayingMagnet.empty();
@@ -2103,34 +2301,112 @@ void App::renderPlayer() {
 
         // 4. Subtitle / Audio Track List overlays
         if (m_showSubList) {
-            int subW = 480;
-            int subH = 400;
+            int subW = 560;
+            int subH = 430;
             int subX = SCREEN_W/2 - subW/2;
             int subY = SCREEN_H/2 - subH/2;
 
-            drawFilledRoundRect(subX, subY, subW, subH, 14, {0, 0, 0, 240});
-            drawRoundRect(subX, subY, subW, subH, 14, {255, 255, 255, 40});
+            drawFilledRoundRect(subX, subY, subW, subH, 16, {16, 20, 30, 248});
+            drawRoundRect(subX, subY, subW, subH, 16, {40, 50, 75, 200});
 
-            drawText("Select Subtitles", subX + 25, subY + 20, ACCENT, m_fontNormal);
+            if (m_subAddonMode) {
+                // ─── Addon Subtitles View (OpenSubtitles v3) ───
+                drawText("Addon Subtitles (OpenSubtitles v3)", subX + 28, subY + 20, ACCENT, m_fontLarge);
 
-            auto tracks = m_player.getSubtitleTracks();
-            int maxVis = 6;
-            int startIdx = 0;
-            if (m_subListIndex >= maxVis) startIdx = m_subListIndex - maxVis + 1;
-            
-            int rowY = subY + 65;
-            for (int i = startIdx; i < (int)tracks.size() && i < startIdx + maxVis; i++) {
-                bool sel = (i == m_subListIndex);
-                SDL_Color bg = sel ? CARD_HL : (tracks[i].selected ? SDL_Color{0, 180, 255, 30} : SDL_Color{255, 255, 255, 10});
-                drawFilledRoundRect(subX + 20, rowY, subW - 40, 42, 6, bg);
-                if (sel) {
-                    drawRoundRect(subX + 20, rowY, subW - 40, 42, 6, ACCENT);
+                if (m_subAddonLoading.load()) {
+                    drawSpinner(subX + subW / 2, subY + subH / 2 - 20, 22);
+                    drawTextCentered("Searching OpenSubtitles v3...", subX + subW / 2, subY + subH / 2 + 18, TEXT_PRIMARY, m_fontNormal);
+                    drawTextCentered("[B] Cancel & Resume Video", subX + subW / 2, subY + subH - 35, TEXT_SECONDARY, m_fontSmall);
+                } else {
+                    std::vector<Subtitle> localSubs;
+                    {
+                        std::lock_guard<std::mutex> lock(m_subMutex);
+                        localSubs = m_addonSubtitles;
+                    }
+
+                    if (localSubs.empty()) {
+                        drawTextCentered("No external subtitles found for this title.", subX + subW / 2, subY + subH / 2 - 10, TEXT_SECONDARY, m_fontNormal);
+                        drawTextCentered("[B] Back & Resume Video", subX + subW / 2, subY + subH - 35, TEXT_PRIMARY, m_fontSmall);
+                    } else {
+                        std::string countStr = std::to_string(localSubs.size()) + " subtitles found:";
+                        drawText(countStr, subX + 28, subY + 56, TEXT_SECONDARY, m_fontSmall);
+
+                        int maxVis = 6;
+                        int startIdx = 0;
+                        if (m_subAddonIndex >= maxVis) startIdx = m_subAddonIndex - maxVis + 1;
+
+                        int rowY = subY + 80;
+                        for (int i = startIdx; i < (int)localSubs.size() && i < startIdx + maxVis; i++) {
+                            bool sel = (i == m_subAddonIndex);
+                            SDL_Color bg = sel ? CARD_HL : SDL_Color{25, 32, 46, 200};
+                            drawFilledRoundRect(subX + 24, rowY, subW - 48, 44, 8, bg);
+                            if (sel) {
+                                drawRoundRect(subX + 24, rowY, subW - 48, 44, 8, ACCENT);
+                            }
+
+                            // Language badge pill
+                            std::string lang = localSubs[i].lang;
+                            for (char& c : lang) c = (char)toupper((unsigned char)c);
+                            if (lang.empty()) lang = "SUB";
+                            drawFilledRoundRect(subX + 36, rowY + 10, 48, 24, 4, {0, 180, 210, 50});
+                            drawTextCentered(lang, subX + 60, rowY + 14, ACCENT, m_fontSmall);
+
+                            // Subtitle title / file
+                            std::string subName = localSubs[i].title;
+                            if (subName.empty()) subName = localSubs[i].lang + " Subtitle #" + std::to_string(i + 1);
+                            if (subName.size() > 48) subName = subName.substr(0, 45) + "..";
+                            drawText(subName, subX + 96, rowY + 13, sel ? ACCENT : TEXT_PRIMARY, m_fontSmall);
+
+                            rowY += 50;
+                        }
+
+                        // Bottom action legend
+                        drawTextCentered("[A] Download & Apply   [B] Cancel & Resume", subX + subW / 2, subY + subH - 30, TEXT_SECONDARY, m_fontSmall);
+                    }
                 }
-                
-                std::string name = tracks[i].name;
-                if (tracks[i].selected) name = "[Active] " + name;
-                drawText(name, subX + 35, rowY + 9, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
-                rowY += 48;
+            } else {
+                // ─── Standard Subtitles View (Add button + Embedded tracks) ───
+                drawText("Subtitles", subX + 28, subY + 18, TEXT_PRIMARY, m_fontLarge);
+
+                // Option 0: Add subtitle from addon button
+                int btnAddY = subY + 58;
+                bool selAdd = (m_subListIndex == 0);
+                drawFilledRoundRect(subX + 24, btnAddY, subW - 48, 44, 8, selAdd ? CARD_HL : SDL_Color{28, 36, 52, 230});
+                if (selAdd) {
+                    drawRoundRect(subX + 24, btnAddY, subW - 48, 44, 8, ACCENT);
+                } else {
+                    drawRoundRect(subX + 24, btnAddY, subW - 48, 44, 8, {50, 64, 92, 180});
+                }
+                drawText("+ Add Subtitle from Addon (OpenSubtitles v3)", subX + 42, btnAddY + 12, selAdd ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+
+                // Divider label
+                drawText("Embedded Tracks:", subX + 28, subY + 114, TEXT_SECONDARY, m_fontSmall);
+
+                auto tracks = m_player.getSubtitleTracks();
+                int maxVis = 5;
+                int startIdx = 0;
+                if (m_subListIndex > 0) {
+                    int trackSelected = m_subListIndex - 1;
+                    if (trackSelected >= maxVis) startIdx = trackSelected - maxVis + 1;
+                }
+
+                int rowY = subY + 138;
+                for (int i = startIdx; i < (int)tracks.size() && i < startIdx + maxVis; i++) {
+                    bool sel = (m_subListIndex == 1 + i);
+                    SDL_Color bg = sel ? CARD_HL : (tracks[i].selected ? SDL_Color{0, 180, 255, 30} : SDL_Color{25, 32, 46, 200});
+                    drawFilledRoundRect(subX + 24, rowY, subW - 48, 42, 6, bg);
+                    if (sel) {
+                        drawRoundRect(subX + 24, rowY, subW - 48, 42, 6, ACCENT);
+                    }
+
+                    std::string name = tracks[i].name;
+                    if (tracks[i].selected) name = "[Active] " + name;
+                    drawText(name, subX + 38, rowY + 11, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+                    rowY += 48;
+                }
+
+                // Bottom action legend
+                drawTextCentered("[A] Select   [B] Close", subX + subW / 2, subY + subH - 28, TEXT_SECONDARY, m_fontSmall);
             }
         }
 
@@ -3494,6 +3770,7 @@ void App::loadDetail(const std::string& type, const std::string& id) {
     m_loadingDetail = true;
     m_loadingStreams = true;
     m_detailEpisodeSelected = false;
+    m_currentPlayingEpisodeId.clear();
     m_detailEpisodeIndex = 0;
     m_detailStreamIndex = 0;
     int currentGen;
@@ -3625,6 +3902,20 @@ void App::playStream(const Stream& stream) {
 
     // Stop any previous playback session cleanly before starting new stream
     m_player.stop();
+
+    m_showSubList = false;
+    m_subAddonMode = false;
+    m_subAddonLoading = false;
+    {
+        std::lock_guard<std::mutex> lock(m_subMutex);
+        m_addonSubtitles.clear();
+    }
+    m_currentPlayingType = m_detailMeta.type;
+    if (m_currentPlayingType == "series" && !m_currentPlayingEpisodeId.empty()) {
+        m_currentPlayingId = m_currentPlayingEpisodeId;
+    } else {
+        m_currentPlayingId = m_detailMeta.id;
+    }
 
     {
         std::lock_guard<std::mutex> lock(m_torrentMutex);
@@ -3925,9 +4216,15 @@ void App::handleDrag(int dx, int dy) {
             if (abs(m_dragAccumY) >= 30) {
                 int diff = -m_dragAccumY / 30;
                 m_dragAccumY = 0;
-                auto tracks = m_player.getSubtitleTracks();
-                if (!tracks.empty()) {
-                    m_subListIndex = std::clamp(m_subListIndex + diff, 0, (int)tracks.size() - 1);
+                if (m_subAddonMode) {
+                    std::lock_guard<std::mutex> lock(m_subMutex);
+                    if (!m_addonSubtitles.empty()) {
+                        m_subAddonIndex = std::clamp(m_subAddonIndex + diff, 0, (int)m_addonSubtitles.size() - 1);
+                    }
+                } else {
+                    auto tracks = m_player.getSubtitleTracks();
+                    int totalItems = 1 + (int)tracks.size();
+                    m_subListIndex = std::clamp(m_subListIndex + diff, 0, totalItems - 1);
                 }
             }
         } else if (m_showAudioList) {

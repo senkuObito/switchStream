@@ -53,6 +53,7 @@ public:
     };
     std::vector<SubtitleTrack> getSubtitleTracks();
     void setSubtitleTrack(int id);
+    bool addSubtitle(const std::string& pathOrUrl, const std::string& title = "");
 
     struct AudioTrack {
         int id;

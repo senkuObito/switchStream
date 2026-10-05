@@ -182,6 +182,21 @@ private:
     int m_subListIndex = 0;
     int m_audioListIndex = 0;
 
+    // Addon Subtitle search & selection state
+    bool m_subAddonMode = false;
+    std::atomic<bool> m_subAddonLoading{false};
+    std::vector<Subtitle> m_addonSubtitles;
+    int m_subAddonIndex = 0;
+    std::mutex m_subMutex;
+    std::atomic<int> m_subSearchGen{0};
+    std::string m_currentPlayingId;
+    std::string m_currentPlayingType;
+    std::string m_currentPlayingEpisodeId;
+    bool m_wasPlayingBeforeSubSearch = true;
+    void fetchAddonSubtitles();
+    void applyAddonSubtitle(const Subtitle& sub);
+    void cancelAddonSubtitle();
+
     // Quality (stream) switcher overlay state
     bool m_showQualityList = false;
     int m_qualityListIndex = 0;

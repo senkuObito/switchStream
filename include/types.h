@@ -105,8 +105,9 @@ struct Stream {
 
 struct Subtitle {
     std::string url;
-    std::string lang;          // ISO 639-1 code
+    std::string lang;          // ISO 639-1 / 639-2 code
     std::string id;
+    std::string title;         // Optional filename or release title
 };
 
 // ─── API Responses ───────────────────────────

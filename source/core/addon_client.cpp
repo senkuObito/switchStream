@@ -356,6 +356,13 @@ bool AddonClient::fetchSubtitles(const AddonManifest& addon,
             sub.url  = getString(s, "url");
             sub.lang = getString(s, "lang");
             sub.id   = getString(s, "id");
+            if (s.HasMember("subtitleFileName") && s["subtitleFileName"].IsString()) {
+                sub.title = s["subtitleFileName"].GetString();
+            } else if (s.HasMember("movieReleaseName") && s["movieReleaseName"].IsString()) {
+                sub.title = s["movieReleaseName"].GetString();
+            } else if (s.HasMember("title") && s["title"].IsString()) {
+                sub.title = s["title"].GetString();
+            }
             if (!sub.url.empty()) {
                 out.subtitles.push_back(std::move(sub));
             }
