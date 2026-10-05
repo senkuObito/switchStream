@@ -61,9 +61,11 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     {"Streaming Catalogs", "Catalogs from Netflix, Disney+, HBO, Prime, etc.", "https://7a82163c306e-streaming-catalogs.baby-beamup.club/manifest.json"},
     {"CyberFlix Catalogs", "Movie and series catalogs sorted by streaming provider.", "https://cyberflix.elfhosted.com/manifest.json"},
     {"TMDB Collections", "Movie collections grouped by franchise.", "https://61ab9c85a149-tmdb-collections.baby-beamup.club/manifest.json"},
+    {"Dramayo", "Asian dramas, series and movies catalog & streams.", "https://dramayo.stream/manifest.json"},
 
     // --- Stream Addons (provide playable stream links) ---
     {"Torrentio", "Torrent streams from YTS, RARBG, 1337x, etc.", "https://torrentio.strem.fun/manifest.json"},
+    {"Filtorrent", "Curated & shaped Torrentio + TorrentsDB streams with resolution filtering.", "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json"},
     {"Flix Streams", "HTTP streams from multiple sources.", "https://flixnest.app/flix-streams/manifest.json"},
     {"Nebula Streams", "HTTP streams from multiple sources.", "https://nebulastreams.onrender.com/manifest.json"},
     {"MovieBox", "HTTP streams for movies and series.", "https://moviebox-cfa7.onrender.com/manifest.json"},
@@ -115,7 +117,8 @@ bool App::init() {
     // SDL init
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) return false;
     if (TTF_Init() < 0) return false;
-    if (IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG) == 0) return false;
+    int imgFlags = IMG_INIT_PNG | IMG_INIT_JPG | IMG_INIT_WEBP;
+    if ((IMG_Init(imgFlags) & (IMG_INIT_PNG | IMG_INIT_JPG)) == 0) return false;
 
 #ifdef __SWITCH__
     mkdir("sdmc:/switch", 0777);
@@ -189,8 +192,8 @@ bool App::init() {
 
     if (!m_fontNormal || !m_fontSmall || !m_fontLarge) return false;
 
-    // Image cache — 32MB max (lightweight)
-    m_imageCache = new ImageCache(m_renderer, 32);
+    // Image cache — 128MB max (lightweight, fits 250+ posters smoothly)
+    m_imageCache = new ImageCache(m_renderer, 128);
 
     // Load saved data
     m_addonManager.loadConfig(CONFIG_FILE);
@@ -200,6 +203,8 @@ bool App::init() {
         const std::vector<std::string> defaultAddons = {
             "https://v3-cinemeta.strem.io/manifest.json",
             "https://torrentio.strem.fun/manifest.json",
+            "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
+            "https://dramayo.stream/manifest.json",
             "https://cyberflix.elfhosted.com/manifest.json",
             "https://yastream.tamthai.de/manifest.json",
             "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
@@ -1038,6 +1043,28 @@ void App::handleInputForPad(u64 kDown) {
                 break;
             }
 
+            bool isPlayerErr = m_torrentFailed || m_player.hasError() ||
+                               (TorrentStream::instance().isActive() == false && !TorrentStream::instance().isOpening() && !m_lastPlayingMagnet.empty());
+            if (isPlayerErr) {
+                if (kDown & (HidNpadButton_B | HidNpadButton_A | HidNpadButton_Plus | HidNpadButton_X | HidNpadButton_Y)) {
+                    printf("[App] Returning to DETAIL from player error state\n");
+                    m_torrentBuffering = false;
+                    m_torrentFailed = false;
+                    m_lastPlayingMagnet.clear();
+                    {
+                        std::lock_guard<std::mutex> lock(m_torrentMutex);
+                        m_torrentPollingActive = false;
+                        m_pendingTorrentPlay = false;
+                    }
+                    if (m_torrentPollingThread.joinable()) {
+                        m_torrentPollingThread.join();
+                    }
+                    m_player.stop();
+                    m_screen = Screen::DETAIL;
+                    break;
+                }
+            }
+
             if (kDown & HidNpadButton_B) {
                 // If a popup overlay menu is open, B closes that menu
                 if (m_showSubList || m_showAudioList || m_showQualityList) {
@@ -1166,6 +1193,8 @@ void App::handleInputForPad(u64 kDown) {
                     const std::vector<std::string> defaultAddons = {
                         "https://v3-cinemeta.strem.io/manifest.json",
                         "https://torrentio.strem.fun/manifest.json",
+                        "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
+                        "https://dramayo.stream/manifest.json",
                         "https://cyberflix.elfhosted.com/manifest.json",
                         "https://yastream.tamthai.de/manifest.json",
                         "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
@@ -1636,6 +1665,8 @@ void App::handleTouch(int x, int y) {
                         const std::vector<std::string> defaultAddons = {
                             "https://v3-cinemeta.strem.io/manifest.json",
                             "https://torrentio.strem.fun/manifest.json",
+                            "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
+                            "https://dramayo.stream/manifest.json",
                             "https://cyberflix.elfhosted.com/manifest.json",
                             "https://yastream.tamthai.de/manifest.json",
                             "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
@@ -1666,6 +1697,26 @@ void App::handleTouch(int x, int y) {
 
     case Screen::PLAYER: {
         double pos = m_player.getPosition();
+        bool isPlayerErr = m_torrentFailed || m_player.hasError() ||
+                           (TorrentStream::instance().isActive() == false && !TorrentStream::instance().isOpening() && !m_lastPlayingMagnet.empty());
+        if (isPlayerErr) {
+            printf("[Touch] Tap on player error screen: returning to DETAIL\n");
+            m_torrentBuffering = false;
+            m_torrentFailed = false;
+            m_lastPlayingMagnet.clear();
+            {
+                std::lock_guard<std::mutex> lock(m_torrentMutex);
+                m_torrentPollingActive = false;
+                m_pendingTorrentPlay = false;
+            }
+            if (m_torrentPollingThread.joinable()) {
+                m_torrentPollingThread.join();
+            }
+            m_player.stop();
+            m_screen = Screen::DETAIL;
+            return;
+        }
+
         if (pos <= 0.01 || m_torrentBuffering) {
             // Loading screen: back button touch handler
             int cardY = SCREEN_H/2 - 170;
@@ -2007,7 +2058,15 @@ void App::render() {
         }
     }
     for (const auto& img : localQueue) {
-        m_imageCache->store(img.url, img.data.data(), img.data.size());
+        SDL_Texture* tex = m_imageCache->store(img.url, img.data.data(), img.data.size());
+        if (!tex) {
+            std::lock_guard<std::mutex> lock(m_downloadedMutex);
+            m_failedPosters.insert(img.url);
+            std::string cacheFile = getDiskCachePath(img.url);
+            if (!cacheFile.empty()) {
+                std::remove(cacheFile.c_str());
+            }
+        }
     }
 
     if (m_screen == Screen::PLAYER) {
@@ -2591,9 +2650,22 @@ static std::string formatStreamDisplay(const Stream& s) {
 void App::renderPlayer() {
     double pos = m_player.getPosition();
     bool isNativeTorrent = TorrentStream::instance().isActive() || TorrentStream::instance().isOpening() || !m_lastPlayingMagnet.empty();
+    bool hasErr = m_torrentFailed || m_player.hasError();
+    if (isNativeTorrent && !TorrentStream::instance().isOpening() && !TorrentStream::instance().isActive() && !m_torrentBuffering && !m_pendingTorrentPlay) {
+        hasErr = true;
+    }
+
+    std::string errMsg;
+    if (m_torrentFailed) {
+        errMsg = m_torrentErrorMsg.empty() ? "No seeders or peers available online" : m_torrentErrorMsg;
+    } else if (m_player.hasError()) {
+        errMsg = m_player.getErrorMessage().empty() ? "Playback decoding failed" : m_player.getErrorMessage();
+    } else if (isNativeTorrent && !TorrentStream::instance().isOpening() && !TorrentStream::instance().isActive()) {
+        errMsg = "Failed to establish torrent connection (0 peers)";
+    }
 
     // Check if torrent prebuffering is complete
-    if (isNativeTorrent && m_torrentBuffering) {
+    if (isNativeTorrent && m_torrentBuffering && !hasErr) {
         double cacheSecs = m_player.getCacheDuration();
         bool cacheIdle = m_player.isCacheIdle();
         // Buffer at least 2.0 seconds before starting playback (responsive, smooth streaming)
@@ -2604,7 +2676,7 @@ void App::renderPlayer() {
         }
     }
 
-    bool showLoading = isNativeTorrent ? m_torrentBuffering : (pos <= 0.01);
+    bool showLoading = hasErr || (isNativeTorrent ? m_torrentBuffering : (pos <= 0.01));
 
     if (showLoading) {
         // Keep the render context active to prevent libmpv warning/hang
@@ -2619,6 +2691,29 @@ void App::renderPlayer() {
         int cardY = SCREEN_H/2 - 170;
         int cardW = 640;
         int cardH = 340;
+
+        if (hasErr) {
+            // High-visibility glassmorphic error card
+            drawFilledRoundRect(cardX, cardY, cardW, cardH, 14, {25, 14, 18, 250});
+            drawRoundRect(cardX, cardY, cardW, cardH, 14, {255, 75, 75, 140});
+
+            drawTextCentered("!  UNABLE TO PLAY STREAM", SCREEN_W/2, cardY + 45, {255, 90, 90, 255}, m_fontLarge);
+            drawTextCentered(errMsg, SCREEN_W/2, cardY + 105, TEXT_PRIMARY, m_fontNormal);
+            drawTextCentered("No active seeders or peers responded for this torrent.", SCREEN_W/2, cardY + 145, {180, 195, 215, 255}, m_fontSmall);
+            drawTextCentered("Please select a different stream provider or quality option.", SCREEN_W/2, cardY + 175, TEXT_SECONDARY, m_fontSmall);
+
+            int btnW = 300;
+            int btnH = 42;
+            int btnX = SCREEN_W/2 - btnW/2;
+            int btnY = cardY + cardH - 65;
+
+            drawFilledRoundRect(btnX, btnY, btnW, btnH, 8, {220, 53, 69, 220});
+            drawRoundRect(btnX, btnY, btnW, btnH, 8, {255, 255, 255, 80});
+            drawTextCentered("Press [B] or [A] to Return", SCREEN_W/2, btnY + 10, {255, 255, 255, 255}, m_fontNormal);
+
+            SDL_RenderPresent(m_renderer);
+            return;
+        }
 
         // Glassmorphic card body
         drawFilledRoundRect(cardX, cardY, cardW, cardH, 14, {15, 18, 25, 240});
@@ -4247,10 +4342,10 @@ void App::downloadWorkerLoop() {
             loadedFromDisk = true;
         }
 
-        // 2. If not on disk, download via HTTP with 10s timeout
+        // 2. If not on disk, download via HTTP with 10s timeout using dedicated image client
         if (!loadedFromDisk) {
-            auto resp = m_http.downloadBytes(url, 10);
-            if (resp.ok() && !resp.body.empty()) {
+            auto resp = m_imageHttp.downloadBytes(url, 10);
+            if (resp.ok() && resp.body.size() >= 128) {
                 imgData = std::move(resp.body);
                 if (!cacheFile.empty()) {
                     writeDiskCache(cacheFile, imgData);
@@ -4741,6 +4836,8 @@ void App::playStream(const Stream& stream) {
             m_torrentPeers = 0;
             m_torrentSpeed = 0.0;
             m_torrentPreloadPercent = 0;
+            m_torrentFailed = false;
+            m_torrentErrorMsg.clear();
         }
 
         m_screen = Screen::PLAYER;
@@ -4757,8 +4854,14 @@ void App::playStream(const Stream& stream) {
                 std::lock_guard<std::mutex> lock(m_torrentMutex);
                 m_pendingTorrentPlay = true;
                 m_pendingTorrentHeaders = headers;
+                m_torrentFailed = false;
+                m_torrentErrorMsg.clear();
             } else {
                 printf("[App] Torrent start failed or cancelled: %s\n", err.c_str());
+                std::lock_guard<std::mutex> lock(m_torrentMutex);
+                m_torrentFailed = true;
+                m_torrentErrorMsg = err.empty() ? "No seeders or peers available online" : err;
+                m_torrentBuffering = false;
             }
         });
 

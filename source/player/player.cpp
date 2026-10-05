@@ -352,6 +352,8 @@ void Player::play(const std::string& url, const std::string& headers) {
     m_cachedCacheIdle.store(false);
     m_cachedBuffering.store(false);
     m_fileLoaded.store(false);
+    m_hasError.store(false);
+    m_errorMessage.clear();
     m_finished = false;
 
     // For torrent streams, start paused so demuxer cache fills before unpausing
@@ -411,6 +413,8 @@ void Player::stop() {
     m_paused   = true;
     m_finished = false;
     m_fileLoaded.store(false);
+    m_hasError.store(false);
+    m_errorMessage.clear();
     m_cachedPos.store(0.0);
     m_cachedDuration.store(0.0);
     m_cachedCacheSecs.store(0.0);
@@ -539,6 +543,11 @@ void Player::update() {
                        end->reason, end->error, m_cachedPos.load());
                 if (end->reason == MPV_END_FILE_REASON_EOF && m_cachedPos.load() > 1.0) {
                     m_finished = true;
+                } else if (end->reason == MPV_END_FILE_REASON_ERROR) {
+                    m_hasError.store(true);
+                    const char* errStr = mpv_error_string(end->error);
+                    m_errorMessage = errStr ? errStr : "Playback decode error";
+                    printf("[Player] Playback error encountered: %s\n", m_errorMessage.c_str());
                 }
                 break;
             }

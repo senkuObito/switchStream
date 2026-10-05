@@ -78,6 +78,7 @@ private:
     TTF_Font* m_fontLarge = nullptr;
 
     HttpClient m_http;
+    HttpClient m_imageHttp;
     AddonClient m_addonClient;
     AddonManager m_addonManager;
     Library m_library;
@@ -138,6 +139,8 @@ private:
     bool m_torrentPollingActive = false;
     bool m_pendingTorrentPlay = false;
     std::string m_pendingTorrentHeaders;
+    bool m_torrentFailed = false;
+    std::string m_torrentErrorMsg;
     std::mutex m_torrentMutex;
     std::thread m_torrentPollingThread;
     std::thread m_homeLoadingThread;

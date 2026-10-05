@@ -40,9 +40,27 @@ SDL_Texture* ImageCache::store(const std::string& url, const void* data, size_t 
     SDL_Surface* surface = IMG_Load_RW(rw, 1); // 1 = auto-free RW
     if (!surface) return nullptr;
 
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(m_renderer, surface);
-    int w = surface->w;
-    int h = surface->h;
+    SDL_Surface* targetSurface = surface;
+    SDL_Surface* downscaled = nullptr;
+    // On Switch 720p/1080p, cards are 150x225 and detail poster is 270x405.
+    // Downscale oversized images (> 300x450) to save massive amounts of RAM/VRAM.
+    if (surface->w > 300 || surface->h > 450) {
+        int targetW = 300;
+        int targetH = (surface->h * targetW) / surface->w;
+        if (targetH < 1) targetH = 1;
+        downscaled = SDL_CreateRGBSurface(0, targetW, targetH, 32,
+                                          0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+        if (downscaled) {
+            SDL_SetSurfaceBlendMode(surface, SDL_BLENDMODE_NONE);
+            SDL_BlitScaled(surface, nullptr, downscaled, nullptr);
+            targetSurface = downscaled;
+        }
+    }
+
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(m_renderer, targetSurface);
+    int w = targetSurface->w;
+    int h = targetSurface->h;
+    if (downscaled) SDL_FreeSurface(downscaled);
     SDL_FreeSurface(surface);
 
     if (!texture) return nullptr;

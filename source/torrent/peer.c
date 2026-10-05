@@ -479,7 +479,7 @@ int peer_fetch_metadata(peer_addr addr, const uint8_t info_hash[20],
                         char *err, size_t errlen) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) { set_err(err, errlen, "socket"); return -1; }
-    set_timeout(sock, 10);
+    set_timeout(sock, 3);
 
     struct sockaddr_in sa = {0};
     sa.sin_family = AF_INET;

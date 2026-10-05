@@ -73,6 +73,8 @@ public:
     bool isBuffering() const;
     double getBufferingPercentage() const;
     bool isFileLoaded() const { return m_fileLoaded.load(); }
+    bool hasError() const { return m_hasError.load(); }
+    std::string getErrorMessage() const { return m_errorMessage; }
 
     std::string getActiveHeaders() const { return m_activeHeaders; }
 
@@ -93,6 +95,8 @@ private:
     mpv_render_context* m_mpvGL = nullptr;
     bool m_paused = false;
     bool m_finished = false;
+    std::atomic<bool> m_hasError{false};
+    std::string m_errorMessage;
     std::string m_activeHeaders;
 
     // Asynchronously observed properties (updated in update() via MPV_EVENT_PROPERTY_CHANGE)

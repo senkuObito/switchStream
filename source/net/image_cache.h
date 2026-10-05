@@ -17,7 +17,7 @@ namespace ss {
 
 class ImageCache {
 public:
-    ImageCache(SDL_Renderer* renderer, int maxCacheMB = 32);
+    ImageCache(SDL_Renderer* renderer, int maxCacheMB = 128);
     ~ImageCache();
 
     // Get texture for URL. Returns nullptr if not cached.

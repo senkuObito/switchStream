@@ -849,10 +849,10 @@ static void claim_piece(torrentfs *t, sess *s, int sid) {
     calc_window(t, &ph, &lo, &hi);
     int64_t fhi = t->file_last_piece;
 
-    if (ph <= lo + t->crit_head) {   // startup: tail (moov) then head
-        for (int64_t i = fhi; i > fhi - t->crit_tail && i >= lo; i--)
-            if (try_claim(t, s, sid, i)) { t->st_claim_ok++; return; }
+    if (ph <= lo + t->crit_head) {   // startup: head first (piece 0 for immediate playback), then tail (moov)
         for (int64_t i = lo; i < lo + t->crit_head && i <= fhi; i++)
+            if (try_claim(t, s, sid, i)) { t->st_claim_ok++; return; }
+        for (int64_t i = fhi; i > fhi - t->crit_tail && i >= lo; i--)
             if (try_claim(t, s, sid, i)) { t->st_claim_ok++; return; }
     }
     for (int64_t i = ph; i < hi; i++)

@@ -153,7 +153,7 @@ struct InstalledAddon {
 
 struct AppConfig {
     std::vector<InstalledAddon> addons;
-    int posterCacheMaxMB = 32;  // lightweight cache
+    int posterCacheMaxMB = 128;  // 128MB image cache (fits 250+ downscaled posters smoothly)
     bool hwDecode = true;
     std::string subtitleLang = "en";
     int uiScale = 100;         // percentage
