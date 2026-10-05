@@ -7,6 +7,10 @@
 
 #include "bencode.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MAX_TRACKERS 32
 #define MAX_FILES 256
 
@@ -118,5 +122,9 @@ int torrent_announce(const torrent_meta *t, peer_addr *peers, int max_peers,
 typedef void (*torrent_peer_cb)(void *ctx, const peer_addr *peers, int n);
 int torrent_announce_cb(const torrent_meta *t, torrent_peer_cb cb, void *ctx,
                         const volatile bool *cancel, char *err, size_t errlen);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

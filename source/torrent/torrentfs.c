@@ -63,11 +63,11 @@
 #define MAX_SESS         24     // live peers; bounded by the socket buffer pool
 #define MAX_CONNECTING   12     // slots allowed to sit in a pending connect
 #define DIAL_STOP_LIVE   16     // enough live sessions: stop dialing new peers
-#define CONNECT_SECS     2      // outbound SYN patience
-#define PREHS_SECS       10     // connected but no handshake yet
+#define CONNECT_SECS     5      // outbound SYN patience
+#define PREHS_SECS       15     // connected but no handshake yet
 #define IDLE_SECS        130    // handshaked, nothing received (see header)
 #define KEEPALIVE_SECS   60
-#define STALL_SECS       6      // requested blocks but nothing came: drop peer
+#define STALL_SECS       15     // requested blocks but nothing came: drop peer
 // A peer can dodge STALL_SECS forever by dribbling one block every few seconds:
 // last_block keeps resetting while the piece it holds never lands. Rather than
 // ban it, we meter every session's receive rate (per session, so it is piece-
@@ -849,10 +849,10 @@ static void claim_piece(torrentfs *t, sess *s, int sid) {
     calc_window(t, &ph, &lo, &hi);
     int64_t fhi = t->file_last_piece;
 
-    if (ph <= lo + t->crit_head) {   // startup: tail (moov) then head
-        for (int64_t i = fhi; i > fhi - t->crit_tail && i >= lo; i--)
-            if (try_claim(t, s, sid, i)) { t->st_claim_ok++; return; }
+    if (ph <= lo + t->crit_head) {   // startup: head first (piece 0 for immediate playback), then tail (moov)
         for (int64_t i = lo; i < lo + t->crit_head && i <= fhi; i++)
+            if (try_claim(t, s, sid, i)) { t->st_claim_ok++; return; }
+        for (int64_t i = fhi; i > fhi - t->crit_tail && i >= lo; i--)
             if (try_claim(t, s, sid, i)) { t->st_claim_ok++; return; }
     }
     for (int64_t i = ph; i < hi; i++)

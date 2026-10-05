@@ -287,6 +287,9 @@ bool AddonClient::fetchStreams(const AddonManifest& addon,
             stream.externalUrl = getString(s, "externalUrl");
             stream.name        = getString(s, "name");
             stream.title       = getString(s, "title");
+            if (stream.title.empty()) {
+                stream.title = getString(s, "description");
+            }
 
             if (s.HasMember("behaviorHints") && s["behaviorHints"].IsObject()) {
                 auto& bh = s["behaviorHints"];

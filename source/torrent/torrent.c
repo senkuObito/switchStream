@@ -13,6 +13,7 @@
 #include "udp_tracker.h"
 #include "magnet.h"
 #include "peer.h"
+#include "dhtclient.h"
 
 static void set_err(char *err, size_t errlen, const char *msg) {
     if (err && errlen) snprintf(err, errlen, "%s", msg);
@@ -294,6 +295,40 @@ static void meta_worker(void *arg) {
     }
 }
 
+// Merges peers from `src` (count `sn`) into `dst` (current size *dn, capacity
+// max), skipping duplicates by ip+port. Returns how many were newly added.
+static int merge_peers(peer_addr *dst, int *dn, int max,
+                       const peer_addr *src, int sn) {
+    int added = 0;
+    for (int i = 0; i < sn && *dn < max; i++) {
+        bool dup = false;
+        for (int j = 0; j < *dn; j++)
+            if (dst[j].ip == src[i].ip && dst[j].port == src[i].port) {
+                dup = true;
+                break;
+            }
+        if (dup) continue;
+        dst[(*dn)++] = src[i];
+        added++;
+    }
+    return added;
+}
+
+// Collector so the array-based torrent_announce and DHT reuses the callback machinery.
+typedef struct {
+    peer_addr *peers;
+    int total;
+    int max;
+    Mutex lock;
+} collector;
+
+static void collect_cb(void *ctx, const peer_addr *peers, int n) {
+    collector *c = ctx;
+    mutexLock(&c->lock);
+    merge_peers(c->peers, &c->total, c->max, peers, n);
+    mutexUnlock(&c->lock);
+}
+
 int torrent_load_magnet(torrent_meta *t, const char *magnet_uri,
                         char *err, size_t errlen) {
     return torrent_load_magnet_peers(t, magnet_uri, NULL, 0, NULL, err, errlen);
@@ -343,6 +378,15 @@ int torrent_load_magnet_peers(torrent_meta *t, const char *magnet_uri,
         torrent_meta_state = META_FAIL;
         set_err(err, errlen, "cancelled by user");
         return -1;
+    }
+
+    // If trackers yielded few peers, augment with DHT lookup
+    if (n < 12 && !g_torrent_open_cancel) {
+        char derr[128] = {0};
+        collector dc = { peers, n, 80 };
+        mutexInit(&dc.lock);
+        dht_find_peers(m.info_hash, 30, 4000, collect_cb, &dc, &g_torrent_open_cancel, derr, sizeof(derr));
+        n = dc.total;
     }
 
     if (n <= 0) {
@@ -600,25 +644,6 @@ static int parse_peers(const be_node *resp, peer_addr *peers, int max_peers) {
     return count;
 }
 
-// Merges peers from `src` (count `sn`) into `dst` (current size *dn, capacity
-// max), skipping duplicates by ip+port. Returns how many were newly added.
-static int merge_peers(peer_addr *dst, int *dn, int max,
-                       const peer_addr *src, int sn) {
-    int added = 0;
-    for (int i = 0; i < sn && *dn < max; i++) {
-        bool dup = false;
-        for (int j = 0; j < *dn; j++)
-            if (dst[j].ip == src[i].ip && dst[j].port == src[i].port) {
-                dup = true;
-                break;
-            }
-        if (dup) continue;
-        dst[(*dn)++] = src[i];
-        added++;
-    }
-    return added;
-}
-
 // Announces to a single HTTP(S) tracker, filling `out` (up to max). Returns the
 // peer count, or -1 on failure (message in err).
 // curl calls this periodically during a transfer; returning non-zero aborts it.
@@ -787,21 +812,6 @@ int torrent_announce_cb(const torrent_meta *t, torrent_peer_cb cb, void *ctx,
 
     free(jobs);
     return answered;
-}
-
-// Collector so the array-based torrent_announce reuses the callback machinery.
-typedef struct {
-    peer_addr *peers;
-    int total;
-    int max;
-    Mutex lock;
-} collector;
-
-static void collect_cb(void *ctx, const peer_addr *peers, int n) {
-    collector *c = ctx;
-    mutexLock(&c->lock);
-    merge_peers(c->peers, &c->total, c->max, peers, n);
-    mutexUnlock(&c->lock);
 }
 
 int torrent_announce(const torrent_meta *t, peer_addr *peers, int max_peers,

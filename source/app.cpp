@@ -9,11 +9,14 @@
 #endif
 #include <thread>
 #include <future>
+#include <sstream>
+#include <regex>
 #include <rapidjson/document.h>
 
 #ifdef __SWITCH__
 #include <switch.h>
 #endif
+#include "torrent/torrent.h"
 #include "torrent/torrent_stream.h"
 
 // Switch screen: 1280x720
@@ -264,6 +267,11 @@ bool App::init() {
     if (!m_player.init(m_window, m_renderer, m_addonManager.getHwDecode())) {
         printf("Warning: mpv player initialization failed!\n");
     }
+
+    // Enable detailed diagnostic logging from native torrent engine
+    torrent_set_log([](const char* msg) {
+        printf("[TorrentLog] %s\n", msg);
+    });
 
     return true;
 }
@@ -2041,6 +2049,167 @@ void App::cancelAddonSubtitle() {
     m_player.resume();
 }
 
+static std::string formatStreamDisplay(const Stream& s) {
+    std::string sizeStr;
+    std::string seedersStr;
+    std::string providerStr;
+    std::string qualityStr;
+    std::string cleanNameStr;
+
+    // 1. Parse s.name (often "AddonName\nQuality" or "Quality")
+    std::vector<std::string> nameLines;
+    {
+        std::stringstream ss(s.name);
+        std::string line;
+        while (std::getline(ss, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+            if (!line.empty()) nameLines.push_back(line);
+        }
+    }
+
+    std::string addonFromField;
+    if (!nameLines.empty()) {
+        addonFromField = nameLines[0];
+        if (nameLines.size() > 1) {
+            qualityStr = nameLines[1];
+        } else {
+            if (nameLines[0].find("1080p") != std::string::npos ||
+                nameLines[0].find("720p") != std::string::npos ||
+                nameLines[0].find("4k") != std::string::npos ||
+                nameLines[0].find("4K") != std::string::npos ||
+                nameLines[0].find("2160p") != std::string::npos ||
+                nameLines[0].find("480p") != std::string::npos) {
+                qualityStr = nameLines[0];
+                addonFromField.clear();
+            }
+        }
+    }
+
+    // 2. Parse s.title
+    std::vector<std::string> titleLines;
+    {
+        std::stringstream ss(s.title);
+        std::string line;
+        while (std::getline(ss, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+            if (!line.empty()) titleLines.push_back(line);
+        }
+    }
+
+    for (const auto& line : titleLines) {
+        // Check for seeders (👤 icon: \xF0\x9F\x91\xA4 or text)
+        size_t seedPos = line.find("\xf0\x9f\x91\xa4");
+        if (seedPos != std::string::npos) {
+            std::string sub = line.substr(seedPos + 4);
+            size_t i = 0;
+            while (i < sub.size() && (sub[i] == ' ' || sub[i] == ':')) i++;
+            std::string num;
+            while (i < sub.size() && isdigit((unsigned char)sub[i])) {
+                num += sub[i++];
+            }
+            if (!num.empty()) seedersStr = num + " seeds";
+        } else {
+            std::regex seedRegex(R"((?:seeds?|seeders?|S:)\s*[:]?\s*(\d+))", std::regex::icase);
+            std::smatch m;
+            if (std::regex_search(line, m, seedRegex)) {
+                seedersStr = m[1].str() + " seeds";
+            }
+        }
+
+        // Check for size (💾 icon: \xF0\x9F\x92\xBE or text)
+        size_t sizePos = line.find("\xf0\x9f\x92\xbe");
+        if (sizePos != std::string::npos) {
+            std::string sub = line.substr(sizePos + 4);
+            size_t i = 0;
+            while (i < sub.size() && sub[i] == ' ') i++;
+            std::string sz;
+            while (i < sub.size() && (isdigit((unsigned char)sub[i]) || sub[i] == '.' || sub[i] == ' ' || isalpha((unsigned char)sub[i]))) {
+                sz += sub[i++];
+                if (sz.find("GB") != std::string::npos || sz.find("MB") != std::string::npos ||
+                    sz.find("gb") != std::string::npos || sz.find("mb") != std::string::npos) {
+                    break;
+                }
+            }
+            while (!sz.empty() && sz.back() == ' ') sz.pop_back();
+            if (!sz.empty()) sizeStr = sz;
+        } else {
+            std::regex sizeRegex(R"((\d+(?:\.\d+)?\s*(?:GB|MB|GiB|MiB)))", std::regex::icase);
+            std::smatch m;
+            if (std::regex_search(line, m, sizeRegex)) {
+                sizeStr = m[1].str();
+            }
+        }
+
+        // Check for provider (⚙️ icon: \xE2\x9a\x99 or text)
+        size_t provPos = line.find("\xe2\x9a\x99");
+        if (provPos != std::string::npos) {
+            std::string sub = line.substr(provPos + 3);
+            if (sub.size() >= 3 && (unsigned char)sub[0] == 0xef && (unsigned char)sub[1] == 0xb8 && (unsigned char)sub[2] == 0x8f) {
+                sub = sub.substr(3);
+            }
+            size_t i = 0;
+            while (i < sub.size() && sub[i] == ' ') i++;
+            std::string prov = sub.substr(i);
+            while (!prov.empty() && (prov.back() == ' ' || prov.back() == '\r')) prov.pop_back();
+            if (!prov.empty()) providerStr = prov;
+        }
+
+        bool hasMeta = (seedPos != std::string::npos || sizePos != std::string::npos || provPos != std::string::npos);
+        bool isFlagLine = (line.find("/") != std::string::npos && (line.find("\xf0\x9f") != std::string::npos || line.size() < 25));
+        if (!hasMeta && !isFlagLine && cleanNameStr.empty()) {
+            cleanNameStr = line;
+        }
+    }
+
+    if (providerStr.empty()) {
+        providerStr = addonFromField;
+    }
+
+    if (cleanNameStr.empty()) {
+        if (!titleLines.empty() && titleLines[0].find("\xf0\x9f\x91\xa4") == std::string::npos) {
+            cleanNameStr = titleLines[0];
+        } else {
+            cleanNameStr = s.title;
+        }
+    }
+
+    std::string nameFlat;
+    for (char c : cleanNameStr) {
+        if (c == '\n' || c == '\r') nameFlat += ' ';
+        else nameFlat += c;
+    }
+    while (!nameFlat.empty() && nameFlat.back() == ' ') nameFlat.pop_back();
+
+    std::string res;
+    if (!sizeStr.empty()) {
+        res += "[" + sizeStr + "] ";
+    }
+    if (!seedersStr.empty()) {
+        res += "[" + seedersStr + "] ";
+    }
+    if (!providerStr.empty()) {
+        res += "[" + providerStr + "] ";
+    }
+
+    std::string trailingName;
+    if (!qualityStr.empty()) {
+        trailingName += qualityStr;
+    }
+    if (!nameFlat.empty()) {
+        if (!trailingName.empty()) trailingName += " — ";
+        trailingName += nameFlat;
+    }
+
+    if (trailingName.empty()) {
+        trailingName = "Stream";
+    }
+
+    res += trailingName;
+    return res;
+}
+
 void App::renderPlayer() {
     double pos = m_player.getPosition();
     bool isNativeTorrent = TorrentStream::instance().isActive() || TorrentStream::instance().isOpening() || !m_lastPlayingMagnet.empty();
@@ -2049,8 +2218,8 @@ void App::renderPlayer() {
     if (isNativeTorrent && m_torrentBuffering) {
         double cacheSecs = m_player.getCacheDuration();
         bool cacheIdle = m_player.isCacheIdle();
-        // Buffer at least 5.0 seconds before starting playback (smooth playback guarantee)
-        if (cacheSecs >= 5.0 || (cacheIdle && cacheSecs > 0.5)) {
+        // Buffer at least 2.0 seconds before starting playback (responsive, smooth streaming)
+        if (cacheSecs >= 2.0 || (cacheIdle && cacheSecs > 0.5)) {
             printf("[App] Torrent pre-buffering complete (%.1f s in cache), starting playback!\n", cacheSecs);
             m_player.resume();
             m_torrentBuffering = false;
@@ -2097,11 +2266,11 @@ void App::renderPlayer() {
                 statDesc = stats.statusStr;
             } else {
                 double cacheSecs = m_player.getCacheDuration();
-                pct = (cacheSecs / 5.0) * 100.0;
+                pct = (cacheSecs / 2.0) * 100.0;
                 if (pct > 100.0) pct = 100.0;
                 if (pct < 0.0) pct = 0.0;
                 char b[128];
-                snprintf(b, sizeof(b), "Buffering: %.1f s / 5.0 s (%.0f%%)", cacheSecs, pct);
+                snprintf(b, sizeof(b), "Buffering: %.1f s / 2.0 s (%.0f%%)", cacheSecs, pct);
                 statDesc = b;
             }
 
@@ -2438,16 +2607,7 @@ void App::renderPlayer() {
                 drawFilledRoundRect(qualX + 20, rowY, qualW - 40, 42, 6, bg);
                 if (sel) drawRoundRect(qualX + 20, rowY, qualW - 40, 42, 6, {120, 220, 120, 200});
 
-                // Build a concise label: name + first line of title description
-                std::string label = localStreams[i].name;
-                if (!localStreams[i].title.empty()) {
-                    std::string desc = localStreams[i].title;
-                    // Take only the first line of the description
-                    auto nl = desc.find('\n');
-                    if (nl != std::string::npos) desc = desc.substr(0, nl);
-                    if (desc.size() > 60) desc = desc.substr(0, 57) + "...";
-                    label += ": " + desc;
-                }
+                std::string label = formatStreamDisplay(localStreams[i]);
                 if (label.size() > 72) label = label.substr(0, 69) + "...";
 
                 drawText(label, qualX + 35, rowY + 9, sel ? SDL_Color{120, 220, 120, 255} : TEXT_PRIMARY, m_fontSmall);
@@ -2875,16 +3035,8 @@ void App::renderDetail() {
             if (sel) drawFilledRect(modalX + 25, y - 2, modalW - 50, 36, CARD_HL);
 
             auto& s = localStreams[i];
-            std::string label = s.name.empty() ? "Stream " + std::to_string(i+1) : s.name;
-            std::string titleClean;
-            for (char c : s.title) {
-                if (c == '\n' || c == '\r') titleClean += ' ';
-                else titleClean += c;
-            }
-            if (titleClean.size() > 50) titleClean = titleClean.substr(0, 47) + "...";
-
-            if (!titleClean.empty()) label += " — " + titleClean;
-            if (label.size() > 70) label = label.substr(0, 67) + "...";
+            std::string label = formatStreamDisplay(s);
+            if (label.size() > 72) label = label.substr(0, 69) + "...";
 
             drawText(label, modalX + 35, y + 4, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
             y += 40;
@@ -2929,16 +3081,8 @@ void App::renderDetail() {
             if (sel) drawFilledRect(infoX - 5, y - 2, SCREEN_W - infoX - 40, 36, CARD_HL);
 
             auto& s = localStreams[i];
-            std::string label = s.name.empty() ? "Stream " + std::to_string(i+1) : s.name;
-            std::string titleClean;
-            for (char c : s.title) {
-                if (c == '\n' || c == '\r') titleClean += ' ';
-                else titleClean += c;
-            }
-            if (titleClean.size() > 70) titleClean = titleClean.substr(0, 67) + "...";
-
-            if (!titleClean.empty()) label += " — " + titleClean;
-            if (label.size() > 90) label = label.substr(0, 87) + "...";
+            std::string label = formatStreamDisplay(s);
+            if (label.size() > 95) label = label.substr(0, 92) + "...";
 
             drawText(label, infoX + 5, y + 4, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
             y += 40;
@@ -3157,9 +3301,6 @@ void App::renderSettings() {
 
         itemY += 88;
     }
-
-    // Draw Author Legend
-    drawText("Author: Antigravity", SCREEN_W - 180, SCREEN_H - 30, {100, 100, 120, 255}, m_fontSmall);
 }
 
 void App::drawNavBar() {
@@ -3224,9 +3365,6 @@ void App::drawNavBar() {
         curX = drawBtnPrompt("B", "Back", curX, curY);
         break;
     }
-
-    // Author watermark on right
-    drawText("Author: Antigravity", SCREEN_W - 170, curY, {90, 100, 125, 255}, m_fontSmall);
 }
 
 // ─── Drawing helpers ─────────────────────────

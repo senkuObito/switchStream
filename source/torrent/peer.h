@@ -32,7 +32,7 @@ enum {
 // directly bounds how fast the (few) reachable peers get found. A live peer's
 // SYN-ACK lands in tens of milliseconds; 1 s is already generous, and 2 s was
 // burning ~94% of all worker time on a 256-peer swarm.
-#define PEER_CONNECT_SECS 1
+#define PEER_CONNECT_SECS 4
 
 typedef struct {
     int sock;           // TCP socket, or -1 when using µTP
