@@ -106,11 +106,15 @@ private:
     std::vector<Stream> m_detailStreams;
     int m_detailStreamIndex = 0;
     
+    enum class DetailFocus { EPISODES, STREAMS };
+    DetailFocus m_detailFocus = DetailFocus::STREAMS;
+
     bool m_detailEpisodeSelected = false;
     int m_detailEpisodeIndex = 0;
     std::vector<Video> m_detailEpisodes;       // ALL episodes (all seasons)
     std::vector<int>   m_detailSeasons;        // sorted unique season numbers
     int m_detailSeasonFilter = 0;              // index into m_detailSeasons (0 = first season)
+    void loadEpisodeStreams(const std::string& epId);
 
 
     int m_libraryIndex = 0;

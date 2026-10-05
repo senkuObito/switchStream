@@ -663,98 +663,157 @@ void App::handleInputForPad(u64 kDown) {
 
     case Screen::DETAIL:
         {
-            if (m_loadingDetail || m_loadingStreams) {
+            if (m_loadingDetail) {
                 if (kDown & HidNpadButton_B) {
-                    if (m_loadingStreams && m_detailEpisodeSelected) {
-                        std::lock_guard<std::mutex> lock(m_streamsMutex);
-                        m_loadingStreams = false;
-                        m_detailEpisodeSelected = false;
-                    } else {
-                        m_screen = Screen::HOME;
-                        m_loadingDetail = false;
-                    }
+                    m_screen = Screen::HOME;
+                    m_loadingDetail = false;
                 }
                 break;
             }
 
-            std::lock_guard<std::mutex> lock(m_streamsMutex);
-
-            // Filter episodes for the current season
             std::vector<Video> currentSeasonEps;
-            if (!m_detailEpisodes.empty() && !m_detailSeasons.empty()) {
-                int targetSeason = m_detailSeasons[m_detailSeasonFilter];
-                for (const auto& ep : m_detailEpisodes) {
-                    if (ep.season == targetSeason) {
-                        currentSeasonEps.push_back(ep);
+            std::vector<Stream> localStreams;
+            int numSeasons = 0;
+            std::string selectedEpId;
+            DetailFocus currentFocus = DetailFocus::STREAMS;
+            {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                if (!m_detailEpisodes.empty() && !m_detailSeasons.empty()) {
+                    numSeasons = (int)m_detailSeasons.size();
+                    int targetSeason = m_detailSeasons[m_detailSeasonFilter];
+                    for (const auto& ep : m_detailEpisodes) {
+                        if (ep.season == targetSeason) {
+                            currentSeasonEps.push_back(ep);
+                        }
                     }
                 }
+                localStreams = m_detailStreams;
+                currentFocus = m_detailFocus;
             }
 
-            if (!m_detailEpisodeSelected && !m_detailEpisodes.empty()) {
-                if (kDown & HidNpadButton_R || kDown & HidNpadButton_Right) {
-                    m_detailSeasonFilter++;
-                    if (m_detailSeasonFilter >= (int)m_detailSeasons.size()) m_detailSeasonFilter = 0;
-                    m_detailEpisodeIndex = 0;
-                }
-                if (kDown & HidNpadButton_L || kDown & HidNpadButton_Left) {
-                    m_detailSeasonFilter--;
-                    if (m_detailSeasonFilter < 0) m_detailSeasonFilter = (int)m_detailSeasons.size() - 1;
-                    m_detailEpisodeIndex = 0;
-                }
-
-                if (kDown & HidNpadButton_Down) m_detailEpisodeIndex++;
-                if (kDown & HidNpadButton_Up) m_detailEpisodeIndex--;
-                if (m_detailEpisodeIndex < 0) m_detailEpisodeIndex = 0;
-                if (m_detailEpisodeIndex >= (int)currentSeasonEps.size())
-                    m_detailEpisodeIndex = currentSeasonEps.empty() ? 0 : (int)currentSeasonEps.size() - 1;
-                
-                if (kDown & HidNpadButton_A && !currentSeasonEps.empty()) {
-                    std::string epId = currentSeasonEps[m_detailEpisodeIndex].id;
-                    m_currentPlayingEpisodeId = epId;
-                    m_detailEpisodeSelected = true;
-                    m_detailStreams.clear();
-                    m_detailStreamIndex = 0;
-                    m_loadingStreams = true;
-                    
-                    int currentGen = ++m_detailGeneration;
-                    std::string epType = m_detailMeta.type;
-
-                    {
-                        std::lock_guard<std::mutex> lock(m_workerMutex);
-                        m_workerTask = 2; // Episode streams
-                        m_workerType = epType;
-                        m_workerId = epId;
-                        m_workerGen = currentGen;
+            if (!currentSeasonEps.empty()) {
+                // TV Series
+                if (currentFocus == DetailFocus::EPISODES) {
+                    // Season switching
+                    if ((kDown & HidNpadButton_R) && numSeasons > 1) {
+                        {
+                            std::lock_guard<std::mutex> lock(m_streamsMutex);
+                            m_detailSeasonFilter = (m_detailSeasonFilter + 1) % numSeasons;
+                            m_detailEpisodeIndex = 0;
+                            int targetSeason = m_detailSeasons[m_detailSeasonFilter];
+                            for (const auto& ep : m_detailEpisodes) {
+                                if (ep.season == targetSeason) {
+                                    selectedEpId = ep.id;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!selectedEpId.empty()) {
+                            loadEpisodeStreams(selectedEpId);
+                        }
+                    } else if ((kDown & HidNpadButton_L) && numSeasons > 1) {
+                        {
+                            std::lock_guard<std::mutex> lock(m_streamsMutex);
+                            m_detailSeasonFilter = (m_detailSeasonFilter - 1 + numSeasons) % numSeasons;
+                            m_detailEpisodeIndex = 0;
+                            int targetSeason = m_detailSeasons[m_detailSeasonFilter];
+                            for (const auto& ep : m_detailEpisodes) {
+                                if (ep.season == targetSeason) {
+                                    selectedEpId = ep.id;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!selectedEpId.empty()) {
+                            loadEpisodeStreams(selectedEpId);
+                        }
+                    } else if (kDown & HidNpadButton_Down) {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        m_detailEpisodeIndex++;
+                        if (m_detailEpisodeIndex >= (int)currentSeasonEps.size())
+                            m_detailEpisodeIndex = (int)currentSeasonEps.size() - 1;
+                    } else if (kDown & HidNpadButton_Up) {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        m_detailEpisodeIndex--;
+                        if (m_detailEpisodeIndex < 0) m_detailEpisodeIndex = 0;
+                    } else if ((kDown & HidNpadButton_Right) || (kDown & HidNpadButton_A)) {
+                        std::string targetEpId;
+                        {
+                            std::lock_guard<std::mutex> lock(m_streamsMutex);
+                            if (m_detailEpisodeIndex >= 0 && m_detailEpisodeIndex < (int)currentSeasonEps.size()) {
+                                targetEpId = currentSeasonEps[m_detailEpisodeIndex].id;
+                            }
+                            m_detailFocus = DetailFocus::STREAMS;
+                        }
+                        if (!targetEpId.empty() && targetEpId != m_currentPlayingEpisodeId) {
+                            loadEpisodeStreams(targetEpId);
+                        }
+                    } else if (kDown & HidNpadButton_B) {
+                        m_screen = Screen::HOME;
                     }
-                    m_workerCv.notify_one();
+                } else {
+                    // STREAMS focus
+                    if (kDown & HidNpadButton_Down) {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        m_detailStreamIndex++;
+                        if (m_detailStreamIndex >= (int)m_detailStreams.size())
+                            m_detailStreamIndex = m_detailStreams.empty() ? 0 : (int)m_detailStreams.size() - 1;
+                    } else if (kDown & HidNpadButton_Up) {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        m_detailStreamIndex--;
+                        if (m_detailStreamIndex < 0) m_detailStreamIndex = 0;
+                    } else if (kDown & HidNpadButton_A) {
+                        Stream toPlay;
+                        bool hasStream = false;
+                        {
+                            std::lock_guard<std::mutex> lock(m_streamsMutex);
+                            if (m_detailStreamIndex >= 0 && m_detailStreamIndex < (int)m_detailStreams.size()) {
+                                toPlay = m_detailStreams[m_detailStreamIndex];
+                                hasStream = true;
+                            }
+                        }
+                        if (hasStream) {
+                            playStream(toPlay);
+                        }
+                    } else if ((kDown & HidNpadButton_Left) || (kDown & HidNpadButton_B)) {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        m_detailFocus = DetailFocus::EPISODES;
+                    }
                 }
-                
-                if (kDown & HidNpadButton_B) m_screen = Screen::HOME;
             } else {
-                if (kDown & HidNpadButton_Down) m_detailStreamIndex++;
-                if (kDown & HidNpadButton_Up) m_detailStreamIndex--;
-                if (m_detailStreamIndex < 0) m_detailStreamIndex = 0;
-                if (m_detailStreamIndex >= (int)m_detailStreams.size())
-                    m_detailStreamIndex = m_detailStreams.empty() ? 0 : (int)m_detailStreams.size() - 1;
-                
-                if (kDown & HidNpadButton_A && !m_detailStreams.empty()) {
-                    playStream(m_detailStreams[m_detailStreamIndex]);
-                }
-
-                // If B is pressed while viewing streams (for movies or episodes)
-                if (kDown & HidNpadButton_B) {
-                    if (m_detailEpisodeSelected) {
-                        m_detailEpisodeSelected = false; // Close modal
-                    } else {
-                        m_screen = Screen::HOME; // Exit movie detail page
+                // Movies
+                if (kDown & HidNpadButton_Down) {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    m_detailStreamIndex++;
+                    if (m_detailStreamIndex >= (int)m_detailStreams.size())
+                        m_detailStreamIndex = m_detailStreams.empty() ? 0 : (int)m_detailStreams.size() - 1;
+                } else if (kDown & HidNpadButton_Up) {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    m_detailStreamIndex--;
+                    if (m_detailStreamIndex < 0) m_detailStreamIndex = 0;
+                } else if (kDown & HidNpadButton_A) {
+                    Stream toPlay;
+                    bool hasStream = false;
+                    {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        if (m_detailStreamIndex >= 0 && m_detailStreamIndex < (int)m_detailStreams.size()) {
+                            toPlay = m_detailStreams[m_detailStreamIndex];
+                            hasStream = true;
+                        }
                     }
+                    if (hasStream) {
+                        playStream(toPlay);
+                    }
+                } else if (kDown & HidNpadButton_B) {
+                    m_screen = Screen::HOME;
                 }
             }
-        }
-        if (kDown & HidNpadButton_X) {
-            m_library.toggleBookmark(m_detailMeta.id, m_detailMeta.type,
-                                      m_detailMeta.name, m_detailMeta.poster);
-            m_library.save(LIB_FILE);
+
+            if (kDown & HidNpadButton_X) {
+                m_library.toggleBookmark(m_detailMeta.id, m_detailMeta.type,
+                                          m_detailMeta.name, m_detailMeta.poster);
+                m_library.save(LIB_FILE);
+            }
         }
         break;
 
@@ -1281,156 +1340,166 @@ void App::handleTouch(int x, int y) {
     }
 
     case Screen::DETAIL: {
-        // "Bookmark   Back" at infoX = 270, y = 175
-        int infoX = 270;
-        if (y >= 165 && y <= 195) {
-            if (x >= infoX && x < infoX + 120) {
+        if (m_loadingDetail) return;
+
+        // Bottom Bar prompts
+        if (y >= SCREEN_H - 45) {
+            bool hasEpisodes = false;
+            bool inEpisodes = false;
+            {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                hasEpisodes = !m_detailEpisodes.empty();
+                inEpisodes = (m_detailFocus == DetailFocus::EPISODES);
+            }
+            if (x < SCREEN_W / 2 - 40) {
+                if (hasEpisodes && inEpisodes) {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    m_detailFocus = DetailFocus::STREAMS;
+                } else {
+                    Stream toPlay;
+                    bool hasStream = false;
+                    {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        if (m_detailStreamIndex >= 0 && m_detailStreamIndex < (int)m_detailStreams.size()) {
+                            toPlay = m_detailStreams[m_detailStreamIndex];
+                            hasStream = true;
+                        }
+                    }
+                    if (hasStream) playStream(toPlay);
+                }
+                return;
+            } else if (x >= SCREEN_W / 2 - 40 && x <= SCREEN_W / 2 + 50) {
+                if (hasEpisodes && !inEpisodes) {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    m_detailFocus = DetailFocus::EPISODES;
+                } else {
+                    m_screen = Screen::HOME;
+                }
+                return;
+            } else {
                 m_library.toggleBookmark(m_detailMeta.id, m_detailMeta.type,
                                           m_detailMeta.name, m_detailMeta.poster);
                 m_library.save(LIB_FILE);
                 return;
             }
-            if (x >= infoX + 130 && x < infoX + 220) {
-                m_screen = Screen::HOME;
-                return;
-            }
+        }
+
+        // Poster tap: Bookmark
+        if (x >= 55 && x <= 325 && y >= 80 && y <= 485) {
+            m_library.toggleBookmark(m_detailMeta.id, m_detailMeta.type,
+                                      m_detailMeta.name, m_detailMeta.poster);
+            m_library.save(LIB_FILE);
+            return;
         }
 
         bool isLoading = false;
         std::vector<Stream> localStreams;
         int currentSelIndex = 0;
-        bool epsSelected = false;
         int currentEpIndex = 0;
         std::vector<Video> localEpisodes;
+        std::vector<int> localSeasons;
+        int currentSeasonFilter = 0;
         {
             std::lock_guard<std::mutex> lock(m_streamsMutex);
             isLoading = m_loadingStreams;
             localStreams = m_detailStreams;
             currentSelIndex = m_detailStreamIndex;
-            epsSelected = m_detailEpisodeSelected;
             currentEpIndex = m_detailEpisodeIndex;
             localEpisodes = m_detailEpisodes;
+            localSeasons = m_detailSeasons;
+            currentSeasonFilter = m_detailSeasonFilter;
         }
 
-        if (isLoading || m_loadingDetail) return;
+        std::vector<Video> currentSeasonEps;
+        if (!localSeasons.empty() && !localEpisodes.empty()) {
+            int targetSeason = localSeasons[currentSeasonFilter];
+            for (const auto& ep : localEpisodes) {
+                if (ep.season == targetSeason) {
+                    currentSeasonEps.push_back(ep);
+                }
+            }
+        } else {
+            currentSeasonEps = localEpisodes;
+        }
 
-        bool isModal = epsSelected;
-
-        if (isModal) {
-            int modalW = 800;
-            int modalH = 500;
-            int modalX = SCREEN_W / 2 - modalW / 2;
-            int modalY = SCREEN_H / 2 - modalH / 2;
-
-            if (x < modalX || x > modalX + modalW || y < modalY || y > modalY + modalH) {
-                // Clicked outside modal -> cancel episode selection
+        // Season pill tap
+        if (!localSeasons.empty() && x >= 355 && x <= 560 && y >= 280 && y <= 330) {
+            std::string selectedEpId;
+            {
                 std::lock_guard<std::mutex> lock(m_streamsMutex);
-                m_detailEpisodeSelected = false;
-                m_loadingStreams = false;
-                return;
+                m_detailSeasonFilter = (m_detailSeasonFilter + 1) % localSeasons.size();
+                m_detailEpisodeIndex = 0;
+                int targetSeason = localSeasons[m_detailSeasonFilter];
+                for (const auto& ep : localEpisodes) {
+                    if (ep.season == targetSeason) {
+                        selectedEpId = ep.id;
+                        break;
+                    }
+                }
             }
-
-            if (localStreams.empty()) return;
-
-            int maxVisible = 9;
-            int startIndex = 0;
-            if (currentSelIndex >= maxVisible) {
-                startIndex = currentSelIndex - maxVisible + 1;
+            if (!selectedEpId.empty()) {
+                loadEpisodeStreams(selectedEpId);
             }
+            return;
+        }
 
-            int streamY = modalY + 80;
-            for (int i = startIndex; i < (int)localStreams.size() && i < startIndex + maxVisible; i++) {
-                int itemMinY = streamY - 2;
-                int itemMaxY = streamY + 34;
-                int itemMinX = modalX + 25;
-                int itemMaxX = modalX + modalW - 25;
+        // Middle column episode cards tap
+        if (!currentSeasonEps.empty() && x >= 355 && x <= 815 && y >= 325 && y <= 620) {
+            int epListY = 330;
+            int epItemH = 36;
+            int epGap = 6;
+            int maxVisibleEps = (615 - epListY) / (epItemH + epGap);
+            if (maxVisibleEps < 3) maxVisibleEps = 3;
 
-                if (x >= itemMinX && x <= itemMaxX && y >= itemMinY && y <= itemMaxY) {
+            int startEp = 0;
+            if (currentEpIndex >= maxVisibleEps / 2) {
+                startEp = currentEpIndex - maxVisibleEps / 2;
+            }
+            if (startEp + maxVisibleEps > (int)currentSeasonEps.size()) {
+                startEp = (int)currentSeasonEps.size() - maxVisibleEps;
+            }
+            if (startEp < 0) startEp = 0;
+
+            int clickedIndex = startEp + (y - epListY) / (epItemH + epGap);
+            if (clickedIndex >= 0 && clickedIndex < (int)currentSeasonEps.size()) {
+                std::string epId = currentSeasonEps[clickedIndex].id;
+                {
                     std::lock_guard<std::mutex> lock(m_streamsMutex);
-                    m_detailStreamIndex = i;
-                    playStream(localStreams[i]);
-                    return;
+                    m_detailEpisodeIndex = clickedIndex;
+                    m_detailFocus = DetailFocus::STREAMS;
                 }
-                streamY += 40;
-            }
-            return;
-        }
-
-        // Episode List Items (Non-Modal)
-        if (!epsSelected && !localEpisodes.empty()) {
-            int remainingH = SCREEN_H - 240 - 40;
-            int maxVisible = remainingH / 40;
-            if (maxVisible < 3) maxVisible = 3;
-
-            int startIndex = 0;
-            if (currentEpIndex >= maxVisible) {
-                startIndex = currentEpIndex - maxVisible + 1;
-            }
-
-            int listY = 240;
-            for (int i = startIndex; i < (int)localEpisodes.size() && i < startIndex + maxVisible; i++) {
-                int itemMinY = listY - 2;
-                int itemMaxY = listY + 34;
-                int itemMinX = infoX - 5;
-                int itemMaxX = SCREEN_W - 40;
-
-                if (x >= itemMinX && x <= itemMaxX && y >= itemMinY && y <= itemMaxY) {
-                    std::string epId = localEpisodes[i].id;
-                    m_currentPlayingEpisodeId = epId;
-                    {
-                        std::lock_guard<std::mutex> lock(m_streamsMutex);
-                        m_detailEpisodeIndex = i;
-                        m_detailEpisodeSelected = true;
-                        m_detailStreams.clear();
-                        m_detailStreamIndex = 0;
-                        m_loadingStreams = true;
-                    }
-
-                    
-                    int currentGen = ++m_detailGeneration;
-                    std::string epType = m_detailMeta.type;
-
-                    {
-                        std::lock_guard<std::mutex> lock(m_workerMutex);
-                        m_workerTask = 2; // Episode streams
-                        m_workerType = epType;
-                        m_workerId = epId;
-                        m_workerGen = currentGen;
-                    }
-                    m_workerCv.notify_one();
-                    return;
+                if (epId != m_currentPlayingEpisodeId) {
+                    loadEpisodeStreams(epId);
                 }
-                listY += 40;
-            }
-            return;
-        }
-
-        // Stream Items (Non-Modal for movies)
-        if (localStreams.empty()) return;
-
-        int remainingH = SCREEN_H - 240 - 40;
-        int maxVisible = remainingH / 40;
-        if (maxVisible < 3) maxVisible = 3;
-
-        int startIndex = 0;
-        if (currentSelIndex >= maxVisible) {
-            startIndex = currentSelIndex - maxVisible + 1;
-        }
-
-        int streamY = 240;
-        for (int i = startIndex; i < (int)localStreams.size() && i < startIndex + maxVisible; i++) {
-            int itemMinY = streamY - 2;
-            int itemMaxY = streamY + 34;
-            int itemMinX = infoX - 5;
-            int itemMaxX = SCREEN_W - 40;
-
-            if (x >= itemMinX && x <= itemMaxX && y >= itemMinY && y <= itemMaxY) {
-                std::lock_guard<std::mutex> lock(m_streamsMutex);
-                m_detailStreamIndex = i;
-                playStream(localStreams[i]);
                 return;
             }
-            streamY += 40;
+        }
+
+        // Right column Streams panel tap
+        if (x >= 845 && x <= 1230 && y >= 140 && y <= 620) {
+            if (localStreams.empty() || isLoading) return;
+
+            int streamStartY = 142;
+            int cardH = 68;
+            int cardGap = 10;
+            int maxVisibleStreams = (540 - 74) / (cardH + cardGap);
+            if (maxVisibleStreams < 3) maxVisibleStreams = 3;
+
+            int startStreamIdx = 0;
+            if (currentSelIndex >= maxVisibleStreams) {
+                startStreamIdx = currentSelIndex - maxVisibleStreams + 1;
+            }
+
+            int clickedStreamIdx = startStreamIdx + (y - streamStartY) / (cardH + cardGap);
+            if (clickedStreamIdx >= 0 && clickedStreamIdx < (int)localStreams.size()) {
+                {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    m_detailStreamIndex = clickedStreamIdx;
+                    m_detailFocus = DetailFocus::STREAMS;
+                }
+                playStream(localStreams[clickedStreamIdx]);
+                return;
+            }
         }
         break;
     }
@@ -2131,6 +2200,231 @@ void App::cancelAddonSubtitle() {
     if (m_wasPlayingBeforeSubSearch) {
         m_player.resume();
     }
+}
+
+static void drawStar(SDL_Renderer* renderer, int cx, int cy, int radius, SDL_Color color) {
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
+
+    const int numPoints = 10;
+    SDL_Point pts[11];
+    double rInner = radius * 0.42;
+    double angleStep = M_PI / 5.0;
+    double startAngle = -M_PI / 2.0;
+
+    for (int i = 0; i < numPoints; i++) {
+        double r = (i % 2 == 0) ? (double)radius : rInner;
+        double a = startAngle + i * angleStep;
+        pts[i].x = cx + (int)(r * cos(a) + 0.5);
+        pts[i].y = cy + (int)(r * sin(a) + 0.5);
+    }
+    pts[10] = pts[0];
+
+    int minY = cy - radius, maxY = cy + radius;
+    for (int y = minY; y <= maxY; y++) {
+        int nodeX[10];
+        int nodes = 0;
+        for (int i = 0; i < numPoints; i++) {
+            int j = (i + 1) % numPoints;
+            if ((pts[i].y < y && pts[j].y >= y) || (pts[j].y < y && pts[i].y >= y)) {
+                if (pts[j].y != pts[i].y) {
+                    nodeX[nodes++] = pts[i].x + (int)((double)(y - pts[i].y) / (pts[j].y - pts[i].y) * (pts[j].x - pts[i].x));
+                }
+            }
+        }
+        for (int i = 0; i < nodes - 1; i++) {
+            for (int j = i + 1; j < nodes; j++) {
+                if (nodeX[i] > nodeX[j]) {
+                    int tmp = nodeX[i];
+                    nodeX[i] = nodeX[j];
+                    nodeX[j] = tmp;
+                }
+            }
+        }
+        for (int i = 0; i < nodes; i += 2) {
+            if (i + 1 < nodes) {
+                SDL_RenderDrawLine(renderer, nodeX[i], y, nodeX[i + 1], y);
+            }
+        }
+    }
+}
+
+struct StreamCardDisplay {
+    std::string line1;
+    std::string line2;
+};
+
+static StreamCardDisplay formatStreamCard(const Stream& s) {
+    std::string sizeStr;
+    std::string seedersStr;
+    std::string providerStr;
+    std::string qualityStr;
+    std::string cleanNameStr;
+
+    // 1. Parse s.name (often "AddonName\nQuality" or "Quality")
+    std::vector<std::string> nameLines;
+    {
+        std::stringstream ss(s.name);
+        std::string line;
+        while (std::getline(ss, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+            if (!line.empty()) nameLines.push_back(line);
+        }
+    }
+
+    std::string addonFromField;
+    if (!nameLines.empty()) {
+        addonFromField = nameLines[0];
+        if (addonFromField.size() >= 2 && addonFromField.front() == '[' && addonFromField.back() == ']') {
+            addonFromField = addonFromField.substr(1, addonFromField.size() - 2);
+        }
+        if (nameLines.size() > 1) {
+            qualityStr = nameLines[1];
+        } else {
+            if (nameLines[0].find("1080p") != std::string::npos ||
+                nameLines[0].find("720p") != std::string::npos ||
+                nameLines[0].find("4k") != std::string::npos ||
+                nameLines[0].find("4K") != std::string::npos ||
+                nameLines[0].find("2160p") != std::string::npos ||
+                nameLines[0].find("480p") != std::string::npos) {
+                qualityStr = nameLines[0];
+                addonFromField.clear();
+            }
+        }
+    }
+
+    // 2. Parse s.title
+    std::vector<std::string> titleLines;
+    {
+        std::stringstream ss(s.title);
+        std::string line;
+        while (std::getline(ss, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            while (!line.empty() && line.front() == ' ') line.erase(line.begin());
+            if (!line.empty()) titleLines.push_back(line);
+        }
+    }
+
+    for (const auto& line : titleLines) {
+        size_t seedPos = line.find("\xf0\x9f\x91\xa4");
+        if (seedPos != std::string::npos) {
+            std::string sub = line.substr(seedPos + 4);
+            size_t i = 0;
+            while (i < sub.size() && (sub[i] == ' ' || sub[i] == ':')) i++;
+            std::string num;
+            while (i < sub.size() && isdigit((unsigned char)sub[i])) {
+                num += sub[i++];
+            }
+            if (!num.empty()) seedersStr = num + " Seeds";
+        } else {
+            std::regex seedRegex(R"((?:seeds?|seeders?|S:)\s*[:]?\s*(\d+))", std::regex::icase);
+            std::smatch m;
+            if (std::regex_search(line, m, seedRegex)) {
+                seedersStr = m[1].str() + " Seeds";
+            }
+        }
+
+        size_t sizePos = line.find("\xf0\x9f\x92\xbe");
+        if (sizePos != std::string::npos) {
+            std::string sub = line.substr(sizePos + 4);
+            size_t i = 0;
+            while (i < sub.size() && sub[i] == ' ') i++;
+            std::string sz;
+            while (i < sub.size() && (isdigit((unsigned char)sub[i]) || sub[i] == '.' || sub[i] == ' ' || isalpha((unsigned char)sub[i]))) {
+                sz += sub[i++];
+                if (sz.find("GB") != std::string::npos || sz.find("MB") != std::string::npos ||
+                    sz.find("gb") != std::string::npos || sz.find("mb") != std::string::npos) {
+                    break;
+                }
+            }
+            while (!sz.empty() && sz.back() == ' ') sz.pop_back();
+            if (!sz.empty()) sizeStr = sz;
+        } else {
+            std::regex sizeRegex(R"((\d+(?:\.\d+)?\s*(?:GB|MB|GiB|MiB)))", std::regex::icase);
+            std::smatch m;
+            if (std::regex_search(line, m, sizeRegex)) {
+                sizeStr = m[1].str();
+            }
+        }
+
+        size_t provPos = line.find("\xe2\x9a\x99");
+        if (provPos != std::string::npos) {
+            std::string sub = line.substr(provPos + 3);
+            if (sub.size() >= 3 && (unsigned char)sub[0] == 0xef && (unsigned char)sub[1] == 0xb8 && (unsigned char)sub[2] == 0x8f) {
+                sub = sub.substr(3);
+            }
+            size_t i = 0;
+            while (i < sub.size() && sub[i] == ' ') i++;
+            std::string prov = sub.substr(i);
+            while (!prov.empty() && (prov.back() == ' ' || prov.back() == '\r')) prov.pop_back();
+            if (!prov.empty()) providerStr = prov;
+        }
+
+        bool hasMeta = (seedPos != std::string::npos || sizePos != std::string::npos || provPos != std::string::npos);
+        bool isFlagLine = (line.find("/") != std::string::npos && (line.find("\xf0\x9f") != std::string::npos || line.size() < 25));
+        if (!hasMeta && !isFlagLine && cleanNameStr.empty()) {
+            cleanNameStr = line;
+        }
+    }
+
+    if (providerStr.empty()) {
+        providerStr = addonFromField;
+    }
+    if (providerStr.empty()) {
+        if (!s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0) {
+            providerStr = "Torrent";
+        } else {
+            providerStr = "Stream";
+        }
+    }
+
+    if (qualityStr.empty()) {
+        std::vector<std::string> qCandidates = {"4K", "2160p", "1080p", "720p", "480p"};
+        for (const auto& q : qCandidates) {
+            if (cleanNameStr.find(q) != std::string::npos || s.title.find(q) != std::string::npos) {
+                qualityStr = q;
+                break;
+            }
+        }
+    }
+
+    if (s.url.find(".m3u8") != std::string::npos && qualityStr.find("HLS") == std::string::npos) {
+        if (!qualityStr.empty()) qualityStr += " HLS";
+        else qualityStr = "HLS";
+    }
+
+    std::string line1 = providerStr;
+    if (!qualityStr.empty()) {
+        line1 += " • " + qualityStr;
+    }
+
+    std::string line2;
+    std::string metaPart;
+    if (!seedersStr.empty()) {
+        metaPart += seedersStr;
+    }
+    if (!sizeStr.empty()) {
+        if (!metaPart.empty()) metaPart += " • ";
+        metaPart += sizeStr;
+    }
+
+    if (!metaPart.empty()) {
+        line2 = "(" + metaPart + ")";
+    } else if (!cleanNameStr.empty()) {
+        line2 = "(" + cleanNameStr + ")";
+    } else {
+        if (!s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0) {
+            line2 = "(Torrent Stream)";
+        } else {
+            line2 = "(Direct Stream)";
+        }
+    }
+
+    if (line1.size() > 32) line1 = line1.substr(0, 30) + "...";
+    if (line2.size() > 36) line2 = line2.substr(0, 34) + "...";
+
+    return {line1, line2};
 }
 
 static std::string formatStreamDisplay(const Stream& s) {
@@ -2959,63 +3253,65 @@ void App::renderSearch() {
 
 void App::renderDetail() {
     if (m_loadingDetail) {
-        drawSpinner(SCREEN_W/2, SCREEN_H/2 - 40, 22);
-        drawTextCentered("Loading item details & stream links...", SCREEN_W/2, SCREEN_H/2 + 25, TEXT_SECONDARY);
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {12, 16, 26, 255});
+        drawSpinner(SCREEN_W / 2, SCREEN_H / 2 - 30, 22);
+        drawTextCentered("Loading item details...", SCREEN_W / 2, SCREEN_H / 2 + 25, TEXT_SECONDARY, m_fontNormal);
         return;
     }
 
-    // Left side: actual poster
-    drawPoster(m_detailMeta, 40, 80, 200, 300);
+    // 1. Cinematic Blurred / Dimmed Backdrop
+    SDL_Texture* bgTex = nullptr;
+    if (m_imageCache) {
+        if (!m_detailMeta.background.empty()) {
+            bgTex = m_imageCache->get(m_detailMeta.background);
+        }
+        if (!bgTex && !m_detailMeta.poster.empty()) {
+            bgTex = m_imageCache->get(m_detailMeta.poster);
+        }
+    }
+    if (bgTex) {
+        SDL_Rect fullScreen = {0, 0, SCREEN_W, SCREEN_H};
+        SDL_RenderCopy(m_renderer, bgTex, nullptr, &fullScreen);
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {10, 14, 22, 228});
+    } else {
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {12, 16, 26, 255});
+    }
 
-    // Right side: info
-    int infoX = 270;
-    drawText(m_detailMeta.name, infoX, 80, TEXT_PRIMARY, m_fontLarge);
+    // 2. Left Column: Large Poster Card (rounded with shadow)
+    int postX = 55;
+    int postY = 80;
+    int postW = 270;
+    int postH = 405;
+    int postR = 14;
 
-    std::string info = m_detailMeta.type;
-    if (!m_detailMeta.releaseInfo.empty()) info += " · " + m_detailMeta.releaseInfo;
-    if (!m_detailMeta.runtime.empty()) info += " · " + m_detailMeta.runtime;
-    if (!m_detailMeta.imdbRating.empty()) info += " · ⭐ " + m_detailMeta.imdbRating;
-    drawText(info, infoX, 115, TEXT_SECONDARY, m_fontSmall);
+    drawFilledRoundRect(postX - 2, postY - 2, postW + 4, postH + 4, postR + 2, {0, 0, 0, 150});
+    drawPoster(m_detailMeta, postX, postY, postW, postH);
+    maskRoundedCorners(postX, postY, postW, postH, postR, {12, 16, 24, 255});
+    drawRoundRect(postX, postY, postW, postH, postR, {55, 70, 95, 140});
 
-    // Description (wrapped)
-    std::string desc = m_detailMeta.description;
-    if (desc.size() > 500) desc = desc.substr(0, 497) + "...";
-    int wrapW = SCREEN_W - infoX - 45;
-    int descH = drawTextWrapped(desc, infoX, 140, wrapW, TEXT_SECONDARY, m_fontSmall);
-    if (descH == 0) descH = 15;
-
-    // Bookmark hint (dynamic Y)
-    int bookmarkY = 140 + descH + 12;
-    const LibraryItem* libItem = m_library.getItem(m_detailMeta.id);
-    std::string bmText = (libItem && libItem->bookmarked) ? "[X] Unbookmark" : "[X] Bookmark";
-    drawText(bmText + "   [B] Back", infoX, bookmarkY, {100, 180, 255, 255}, m_fontSmall);
-
-    // Streams Header (dynamic Y)
-    int streamsHeaderY = bookmarkY + 30;
-
+    // Extract thread-safe state for middle & right panels
     bool isLoading = false;
     std::vector<Stream> localStreams;
     int currentSelIndex = 0;
-    bool epsSelected = false;
     int currentEpIndex = 0;
     std::vector<Video> localEpisodes;
     std::vector<int> localSeasons;
     int currentSeasonFilter = 0;
+    DetailFocus focus = DetailFocus::STREAMS;
     {
         std::lock_guard<std::mutex> lock(m_streamsMutex);
         isLoading = m_loadingStreams;
         localStreams = m_detailStreams;
         currentSelIndex = m_detailStreamIndex;
-        epsSelected = m_detailEpisodeSelected;
         currentEpIndex = m_detailEpisodeIndex;
         localEpisodes = m_detailEpisodes;
         localSeasons = m_detailSeasons;
         currentSeasonFilter = m_detailSeasonFilter;
+        focus = m_detailFocus;
     }
 
-    // Filter localEpisodes by current season
     std::vector<Video> currentSeasonEps;
-    if (!localSeasons.empty()) {
+    if (!localSeasons.empty() && !localEpisodes.empty()) {
         int targetSeason = localSeasons[currentSeasonFilter];
         for (const auto& ep : localEpisodes) {
             if (ep.season == targetSeason) {
@@ -3026,156 +3322,180 @@ void App::renderDetail() {
         currentSeasonEps = localEpisodes;
     }
 
+    // 3. Middle Column: Info & Episodes
+    int infoX = 355;
+    int infoW = 460;
+
+    // Title
+    std::string title = m_detailMeta.name;
+    if (title.size() > 34) title = title.substr(0, 31) + "...";
+    drawText(title, infoX, 80, TEXT_PRIMARY, m_fontLarge);
+
+    // Badges Row
+    int badgeX = infoX;
+    int badgeY = 125;
+    auto drawBadge = [this, &badgeX, badgeY](const std::string& text) {
+        if (text.empty()) return;
+        int tw = 0, th = 0;
+        TTF_SizeUTF8(m_fontSmall, text.c_str(), &tw, &th);
+        int pillW = tw + 22;
+        drawFilledRoundRect(badgeX, badgeY, pillW, 26, 8, {42, 52, 72, 200});
+        drawRoundRect(badgeX, badgeY, pillW, 26, 8, {65, 80, 110, 160});
+        drawText(text, badgeX + 11, badgeY + 5, {220, 230, 245, 255}, m_fontSmall);
+        badgeX += pillW + 10;
+    };
+
+    if (!m_detailMeta.releaseInfo.empty()) {
+        drawBadge(m_detailMeta.releaseInfo);
+    }
     if (!localEpisodes.empty()) {
-        std::string seasonTabs = "Select Episode:";
-        if (!localSeasons.empty()) {
-            int currentS = localSeasons[currentSeasonFilter];
-            seasonTabs = "Season: < " + std::to_string(currentS) + " >  (L/R to change)";
-        }
-        drawText(seasonTabs, infoX, streamsHeaderY, ACCENT, m_fontNormal);
-        int streamsStartY = streamsHeaderY + 32;
-
-        int remainingH = SCREEN_H - streamsStartY - 40;
-        int maxVisible = remainingH / 40;
-        if (maxVisible < 3) maxVisible = 3;
-
-        int startIndex = 0;
-        if (currentEpIndex >= maxVisible / 2) {
-            startIndex = currentEpIndex - maxVisible / 2;
-        }
-        if (startIndex + maxVisible > (int)currentSeasonEps.size()) {
-            startIndex = (int)currentSeasonEps.size() - maxVisible;
-        }
-        if (startIndex < 0) startIndex = 0;
-
-        int y = streamsStartY;
-        if (startIndex > 0) {
-            drawText("^ More episodes above...", infoX, y - 18, TEXT_SECONDARY, m_fontSmall);
-        }
-
-        for (int i = startIndex; i < (int)currentSeasonEps.size() && i < startIndex + maxVisible; i++) {
-            bool sel = (i == currentEpIndex);
-            if (sel) drawFilledRect(infoX - 5, y - 2, SCREEN_W - infoX - 40, 36, CARD_HL);
-
-            auto& ep = currentSeasonEps[i];
-            std::string label = "S" + std::to_string(ep.season) + " E" + std::to_string(ep.episode);
-            if (!ep.title.empty()) label += " — " + ep.title;
-            if (label.size() > 90) label = label.substr(0, 87) + "...";
-
-            drawText(label, infoX + 5, y + 4, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
-            y += 40;
-        }
-
-        if (startIndex + maxVisible < (int)currentSeasonEps.size()) {
-            drawText("v More episodes below...", infoX, y + 2, TEXT_SECONDARY, m_fontSmall);
-        }
-
-        if (!epsSelected) return;
+        drawBadge(std::to_string(localEpisodes.size()) + " Episodes");
+    } else if (!m_detailMeta.runtime.empty()) {
+        drawBadge(m_detailMeta.runtime);
+    }
+    if (!m_detailMeta.genres.empty()) {
+        std::string gStr = m_detailMeta.genres[0];
+        if (m_detailMeta.genres.size() > 1) gStr += ", " + m_detailMeta.genres[1];
+        drawBadge(gStr);
+    } else if (!m_detailMeta.type.empty()) {
+        std::string t = m_detailMeta.type;
+        if (!t.empty()) t[0] = toupper(t[0]);
+        drawBadge(t);
     }
 
-    bool isModal = epsSelected;
-    
-    if (isModal) {
-        // Draw fullscreen dim
-        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 180});
-        
-        // Draw modal box
-        int modalW = 800;
-        int modalH = 500;
-        int modalX = SCREEN_W / 2 - modalW / 2;
-        int modalY = SCREEN_H / 2 - modalH / 2;
-        drawFilledRect(modalX, modalY, modalW, modalH, {30, 30, 45, 255});
-        drawRect(modalX, modalY, modalW, modalH, ACCENT);
-        
-        auto& ep = currentSeasonEps[currentEpIndex];
-        std::string epLabel = "S" + std::to_string(ep.season) + " E" + std::to_string(ep.episode);
-        
-        if (isLoading) {
-            drawSpinner(SCREEN_W/2, SCREEN_H/2 - 20, 20);
-            drawTextCentered("Loading streams for " + epLabel + "...", SCREEN_W/2, SCREEN_H/2 + 20, TEXT_PRIMARY);
-            drawTextCentered("Press [B] or tap outside to cancel", SCREEN_W/2, SCREEN_H/2 + 60, TEXT_SECONDARY, m_fontSmall);
-            return;
-        }
-        
-        if (localStreams.empty()) {
-            drawTextCentered("No playable streams found for " + epLabel + ".", SCREEN_W/2, SCREEN_H/2, TEXT_SECONDARY);
-            return;
-        }
-        
-        drawText("Available Streams for " + epLabel + ":", modalX + 30, modalY + 30, ACCENT, m_fontNormal);
-        
-        int streamsStartY = modalY + 80;
-        int maxVisible = 9;
-        int startIndex = 0;
-        if (currentSelIndex >= maxVisible) {
-            startIndex = currentSelIndex - maxVisible + 1;
-        }
+    // Rating (Star + IMDB)
+    int ratingY = 162;
+    if (!m_detailMeta.imdbRating.empty()) {
+        drawStar(m_renderer, infoX + 8, ratingY + 9, 8, {255, 204, 0, 255});
+        drawText(m_detailMeta.imdbRating + " IMDB", infoX + 22, ratingY, {255, 255, 255, 255}, m_fontSmall);
+    }
 
-        int y = streamsStartY;
-        if (startIndex > 0) {
-            drawText("^ More streams above...", modalX + 30, y - 18, TEXT_SECONDARY, m_fontSmall);
+    // Synopsis / Description
+    int descY = 194;
+    std::string desc = m_detailMeta.description;
+    int maxDescChars = localEpisodes.empty() ? 460 : 210;
+    if ((int)desc.size() > maxDescChars) {
+        desc = desc.substr(0, maxDescChars - 3) + "...";
+    }
+    int descH = drawTextWrapped(desc, infoX, descY, infoW, {175, 185, 205, 255}, m_fontSmall);
+    if (descH <= 0) descH = 15;
+
+    // Series Seasons & Episode List
+    if (!localEpisodes.empty()) {
+        int seasonY = descY + descH + 14;
+        if (seasonY < 290) seasonY = 290;
+
+        int curSeason = localSeasons.empty() ? 1 : localSeasons[currentSeasonFilter];
+        std::string seasonStr = "Season " + std::to_string(curSeason);
+        if (localSeasons.size() > 1) seasonStr += "  ◄ ► (L/R)";
+
+        int sW = 0, sH = 0;
+        TTF_SizeUTF8(m_fontSmall, seasonStr.c_str(), &sW, &sH);
+        int pillW = sW + 24;
+        drawFilledRoundRect(infoX, seasonY, pillW, 28, 8, {36, 48, 70, 220});
+        drawRoundRect(infoX, seasonY, pillW, 28, 8, {0, 180, 220, 160});
+        drawText(seasonStr, infoX + 12, seasonY + 5, {0, 229, 255, 255}, m_fontSmall);
+
+        // Episode List
+        int epListY = seasonY + 36;
+        int epListH = 615 - epListY;
+        int epItemH = 36;
+        int epGap = 6;
+        int maxVisibleEps = epListH / (epItemH + epGap);
+        if (maxVisibleEps < 3) maxVisibleEps = 3;
+
+        int startEp = 0;
+        if (currentEpIndex >= maxVisibleEps / 2) {
+            startEp = currentEpIndex - maxVisibleEps / 2;
         }
-
-        for (int i = startIndex; i < (int)localStreams.size() && i < startIndex + maxVisible; i++) {
-            bool sel = (i == currentSelIndex);
-            if (sel) drawFilledRect(modalX + 25, y - 2, modalW - 50, 36, CARD_HL);
-
-            auto& s = localStreams[i];
-            std::string label = formatStreamDisplay(s);
-            if (label.size() > 72) label = label.substr(0, 69) + "...";
-
-            drawText(label, modalX + 35, y + 4, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
-            y += 40;
+        if (startEp + maxVisibleEps > (int)currentSeasonEps.size()) {
+            startEp = (int)currentSeasonEps.size() - maxVisibleEps;
         }
+        if (startEp < 0) startEp = 0;
 
-        if (startIndex + maxVisible < (int)localStreams.size()) {
-            drawText("v More streams below...", modalX + 30, y + 2, TEXT_SECONDARY, m_fontSmall);
+        int curEpY = epListY;
+        for (int i = startEp; i < (int)currentSeasonEps.size() && i < startEp + maxVisibleEps; i++) {
+            bool isFocused = (focus == DetailFocus::EPISODES && i == currentEpIndex);
+            bool isCurrentSelected = (i == currentEpIndex);
+
+            SDL_Color bgCol = isFocused ? SDL_Color{28, 54, 82, 240} : (isCurrentSelected ? SDL_Color{34, 44, 62, 200} : SDL_Color{22, 28, 42, 160});
+            SDL_Color borderCol = isFocused ? SDL_Color{0, 229, 255, 255} : (isCurrentSelected ? SDL_Color{0, 180, 215, 120} : SDL_Color{42, 52, 72, 120});
+
+            drawFilledRoundRect(infoX, curEpY, infoW, epItemH, 8, bgCol);
+            drawRoundRect(infoX, curEpY, infoW, epItemH, 8, borderCol);
+            if (isFocused) {
+                drawRoundRect(infoX - 1, curEpY - 1, infoW + 2, epItemH + 2, 8, {0, 229, 255, 100});
+            }
+
+            auto& ep = currentSeasonEps[i];
+            std::string epLabel = "Episode " + std::to_string(ep.episode);
+            if (!ep.title.empty()) epLabel += " — " + ep.title;
+            if (epLabel.size() > 42) epLabel = epLabel.substr(0, 39) + "...";
+
+            SDL_Color txtCol = isFocused ? SDL_Color{0, 229, 255, 255} : (isCurrentSelected ? SDL_Color{255, 255, 255, 255} : SDL_Color{180, 195, 215, 255});
+            drawText(epLabel, infoX + 14, curEpY + 8, txtCol, m_fontSmall);
+
+            curEpY += epItemH + epGap;
         }
-        
+    }
+
+    // 4. Right Column: Streams Panel (Card)
+    int panelX = 845;
+    int panelY = 80;
+    int panelW = 385;
+    int panelH = 540;
+    int panelR = 16;
+
+    drawFilledRoundRect(panelX, panelY, panelW, panelH, panelR, {16, 22, 34, 225});
+    drawRoundRect(panelX, panelY, panelW, panelH, panelR, {48, 62, 88, 160});
+
+    drawText("Streams", panelX + 22, panelY + 18, {255, 255, 255, 255}, m_fontLarge);
+
+    if (isLoading) {
+        drawSpinner(panelX + panelW / 2, panelY + panelH / 2 - 15, 18);
+        drawTextCentered("Loading streams...", panelX + panelW / 2, panelY + panelH / 2 + 20, TEXT_PRIMARY, m_fontSmall);
+    } else if (localStreams.empty()) {
+        drawTextCentered("No streams found.", panelX + panelW / 2, panelY + panelH / 2, TEXT_SECONDARY, m_fontNormal);
     } else {
-        // NON-MODAL for movies!
-        drawText("Available Streams:", infoX, streamsHeaderY, ACCENT, m_fontNormal);
-        int streamsStartY = streamsHeaderY + 32;
+        int streamStartY = panelY + 62;
+        int cardW = panelW - 36;
+        int cardH = 68;
+        int cardGap = 10;
+        int cardR = 12;
+        int maxVisibleStreams = (panelH - 74) / (cardH + cardGap);
+        if (maxVisibleStreams < 3) maxVisibleStreams = 3;
 
-        if (isLoading) {
-            drawSpinner(infoX - 25, streamsStartY + 8, 10);
-            drawText("Querying addons for stream links... Please wait...", infoX, streamsStartY, {150, 200, 255, 255}, m_fontSmall);
-            return;
+        int startStreamIdx = 0;
+        if (currentSelIndex >= maxVisibleStreams) {
+            startStreamIdx = currentSelIndex - maxVisibleStreams + 1;
         }
 
-        if (localStreams.empty()) {
-            drawText("No playable streams found.", infoX, streamsStartY, TEXT_SECONDARY);
-            return;
-        }
+        int curCardY = streamStartY;
+        for (int i = startStreamIdx; i < (int)localStreams.size() && i < startStreamIdx + maxVisibleStreams; i++) {
+            bool isSel = (focus == DetailFocus::STREAMS && i == currentSelIndex);
+            if (localEpisodes.empty()) {
+                isSel = (i == currentSelIndex);
+            }
 
-        int remainingH = SCREEN_H - streamsStartY - 40;
-        int maxVisible = remainingH / 40;
-        if (maxVisible < 3) maxVisible = 3;
+            int cardX = panelX + 18;
+            StreamCardDisplay card = formatStreamCard(localStreams[i]);
 
-        int startIndex = 0;
-        if (currentSelIndex >= maxVisible) {
-            startIndex = currentSelIndex - maxVisible + 1;
-        }
+            if (isSel) {
+                drawFilledRoundRect(cardX, curCardY, cardW, cardH, cardR, {22, 45, 68, 245});
+                drawRoundRect(cardX, curCardY, cardW, cardH, cardR, {0, 229, 255, 255});
+                drawRoundRect(cardX - 1, curCardY - 1, cardW + 2, cardH + 2, cardR, {0, 229, 255, 120});
 
-        int y = streamsStartY;
-        if (startIndex > 0) {
-            drawText("^ More streams above...", infoX, y - 18, TEXT_SECONDARY, m_fontSmall);
-        }
+                drawText(card.line1, cardX + 16, curCardY + 11, {255, 255, 255, 255}, m_fontNormal);
+                drawText(card.line2, cardX + 16, curCardY + 38, {110, 220, 240, 255}, m_fontSmall);
+            } else {
+                drawFilledRoundRect(cardX, curCardY, cardW, cardH, cardR, {25, 33, 48, 180});
+                drawRoundRect(cardX, curCardY, cardW, cardH, cardR, {48, 60, 84, 150});
 
-        for (int i = startIndex; i < (int)localStreams.size() && i < startIndex + maxVisible; i++) {
-            bool sel = (i == currentSelIndex);
-            if (sel) drawFilledRect(infoX - 5, y - 2, SCREEN_W - infoX - 40, 36, CARD_HL);
+                drawText(card.line1, cardX + 16, curCardY + 11, {225, 235, 245, 255}, m_fontNormal);
+                drawText(card.line2, cardX + 16, curCardY + 38, {140, 155, 175, 255}, m_fontSmall);
+            }
 
-            auto& s = localStreams[i];
-            std::string label = formatStreamDisplay(s);
-            if (label.size() > 95) label = label.substr(0, 92) + "...";
-
-            drawText(label, infoX + 5, y + 4, sel ? ACCENT : TEXT_PRIMARY, m_fontNormal);
-            y += 40;
-        }
-
-        if (startIndex + maxVisible < (int)localStreams.size()) {
-            drawText("v More streams below...", infoX, y + 2, TEXT_SECONDARY, m_fontSmall);
+            curCardY += cardH + cardGap;
         }
     }
 }
@@ -3428,11 +3748,44 @@ void App::drawNavBar() {
         curX = drawBtnPrompt("X", "Sort", curX, curY);
         curX = drawBtnPrompt("Y", "New Search", curX, curY);
         break;
-    case Screen::DETAIL:
-        curX = drawBtnPrompt("A", "Play Stream", curX, curY);
-        curX = drawBtnPrompt("B", "Back", curX, curY);
-        curX = drawBtnPrompt("X", "Bookmark", curX, curY);
+    case Screen::DETAIL: {
+        bool hasEpisodes = false;
+        bool inEpisodes = false;
+        {
+            std::lock_guard<std::mutex> lock(m_streamsMutex);
+            hasEpisodes = !m_detailEpisodes.empty();
+            inEpisodes = (m_detailFocus == DetailFocus::EPISODES);
+        }
+
+        const LibraryItem* libItem = m_library.getItem(m_detailMeta.id);
+        std::string bmLabel = (libItem && libItem->bookmarked) ? "Bookmarked" : "Bookmark";
+
+        std::vector<std::pair<std::string, std::string>> prompts;
+        if (hasEpisodes && inEpisodes) {
+            prompts.push_back({"A", "Streams"});
+            prompts.push_back({"L/R", "Season"});
+            prompts.push_back({"B", "Back"});
+            prompts.push_back({"X", bmLabel});
+        } else {
+            prompts.push_back({"A", "Play Stream"});
+            prompts.push_back({"B", hasEpisodes ? "Episodes" : "Back"});
+            prompts.push_back({"X", bmLabel});
+        }
+
+        int totalW = 0;
+        for (const auto& p : prompts) {
+            int btnW = std::max(22, (int)p.first.size() * 10 + 10);
+            int labelW = (int)p.second.size() * 8 + 18;
+            totalW += btnW + labelW + 24;
+        }
+        totalW -= 24;
+
+        int centeredX = std::max(40, (SCREEN_W - totalW) / 2);
+        for (const auto& p : prompts) {
+            centeredX = drawBtnPrompt(p.first, p.second, centeredX, curY) + 24;
+        }
         break;
+    }
     case Screen::LIBRARY:
         curX = drawBtnPrompt("A", "Play / Resume", curX, curY);
         curX = drawBtnPrompt("B", "Back", curX, curY);
@@ -4031,6 +4384,9 @@ void App::detailWorkerLoop() {
                         seasons.push_back(v.season);
                 }
 
+                std::string firstEpId;
+                if (!sortedEps.empty()) firstEpId = sortedEps[0].id;
+
                 {
                     std::lock_guard<std::mutex> lock(m_streamsMutex);
                     if (m_detailGeneration.load() != currentGen) continue;
@@ -4038,9 +4394,61 @@ void App::detailWorkerLoop() {
                     m_detailSeasons     = std::move(seasons);
                     m_detailSeasonFilter = 0;
                     m_detailEpisodeIndex = 0;
-                    m_detailMeta = std::move(loadedMeta);
+                    m_detailFocus        = DetailFocus::EPISODES;
+                    m_detailMeta        = std::move(loadedMeta);
+                    m_currentPlayingEpisodeId = firstEpId;
+                    m_loadingStreams    = true;
+                    m_loadingDetail     = false;
+                }
+
+                if (!firstEpId.empty()) {
+                    auto rawStreams = m_addonManager.getAllStreams(type, firstEpId);
+                    std::vector<Stream> loadedStreams;
+                    for (const auto& s : rawStreams) {
+                        bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
+                        if (isTorrentStream) {
+                            if (!m_addonManager.getEnableTorrents()) continue;
+                            if (isFourKOrHigher(s)) continue;
+                            static const std::string DEFAULT_MAGNET_TRACKERS =
+                                "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
+                                "&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce"
+                                "&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce"
+                                "&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce"
+                                "&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce";
+
+                            if (!s.url.empty()) {
+                                Stream conv = s;
+                                if (conv.url.rfind("magnet:", 0) == 0 && conv.url.find("opentrackr.org") == std::string::npos) {
+                                    conv.url += DEFAULT_MAGNET_TRACKERS;
+                                }
+                                loadedStreams.push_back(conv);
+                            } else if (!s.infoHash.empty()) {
+                                Stream conv = s;
+                                conv.url = "magnet:?xt=urn:btih:" + s.infoHash + DEFAULT_MAGNET_TRACKERS;
+                                loadedStreams.push_back(conv);
+                            }
+                        } else {
+                            if (!s.url.empty()) {
+                                bool isHttp = s.url.rfind("http", 0) == 0;
+                                if (!isHttp) continue;
+                                loadedStreams.push_back(s);
+                            } else if (!s.ytId.empty()) {
+                                Stream conv = s;
+                                conv.url = "https://www.youtube.com/watch?v=" + s.ytId;
+                                loadedStreams.push_back(conv);
+                            }
+                        }
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        if (m_detailGeneration.load() != currentGen) continue;
+                        m_detailStreams = std::move(loadedStreams);
+                        m_loadingStreams = false;
+                    }
+                } else {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
                     m_loadingStreams = false;
-                    m_loadingDetail = false;
                 }
                 continue;
             }
@@ -4148,11 +4556,13 @@ void App::loadDetail(const std::string& type, const std::string& id) {
     m_currentPlayingEpisodeId.clear();
     m_detailEpisodeIndex = 0;
     m_detailStreamIndex = 0;
+    m_detailSeasonFilter = 0;
     int currentGen;
     {
         std::lock_guard<std::mutex> lock(m_streamsMutex);
         m_detailStreams.clear();
         m_detailEpisodes.clear();
+        m_detailFocus = DetailFocus::STREAMS;
         currentGen = ++m_detailGeneration;
     }
 
@@ -4163,6 +4573,30 @@ void App::loadDetail(const std::string& type, const std::string& id) {
         m_workerTask = 1; // Meta + Streams
         m_workerType = type;
         m_workerId = id;
+        m_workerGen = currentGen;
+    }
+    m_workerCv.notify_one();
+}
+
+void App::loadEpisodeStreams(const std::string& epId) {
+    if (epId.empty()) return;
+    int currentGen;
+    std::string epType;
+    {
+        std::lock_guard<std::mutex> lock(m_streamsMutex);
+        m_currentPlayingEpisodeId = epId;
+        m_detailStreams.clear();
+        m_detailStreamIndex = 0;
+        m_loadingStreams = true;
+        currentGen = ++m_detailGeneration;
+        epType = m_detailMeta.type;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_workerMutex);
+        m_workerTask = 2; // Episode streams
+        m_workerType = epType;
+        m_workerId = epId;
         m_workerGen = currentGen;
     }
     m_workerCv.notify_one();
@@ -4514,12 +4948,10 @@ void App::handleDrag(int dx, int dy) {
     }
 
     case Screen::DETAIL: {
-        bool epsSelected = false;
         std::vector<Video> localEpisodes;
         std::vector<Stream> localStreams;
         {
             std::lock_guard<std::mutex> lock(m_streamsMutex);
-            epsSelected = m_detailEpisodeSelected;
             localEpisodes = m_detailEpisodes;
             localStreams = m_detailStreams;
         }
@@ -4528,16 +4960,16 @@ void App::handleDrag(int dx, int dy) {
         if (abs(m_dragAccumY) >= 15) {
             int diff = -m_dragAccumY / 15;
             
-            if (!epsSelected && !localEpisodes.empty()) {
-                int prev = m_detailEpisodeIndex;
+            if (m_lastMouseX >= 840) {
+                if (!localStreams.empty()) {
+                    std::lock_guard<std::mutex> lock(m_streamsMutex);
+                    m_detailStreamIndex = std::clamp(m_detailStreamIndex + diff, 0, (int)localStreams.size() - 1);
+                    m_dragAccumY = 0;
+                }
+            } else if (!localEpisodes.empty()) {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
                 m_detailEpisodeIndex = std::clamp(m_detailEpisodeIndex + diff, 0, (int)localEpisodes.size() - 1);
                 m_dragAccumY = 0;
-                printf("[Touch] Drag DETAIL Episode Index: %d -> %d\n", prev, m_detailEpisodeIndex);
-            } else if (!localStreams.empty()) {
-                int prev = m_detailStreamIndex;
-                m_detailStreamIndex = std::clamp(m_detailStreamIndex + diff, 0, (int)localStreams.size() - 1);
-                m_dragAccumY = 0;
-                printf("[Touch] Drag DETAIL Stream Index: %d -> %d\n", prev, m_detailStreamIndex);
             }
         }
         break;
