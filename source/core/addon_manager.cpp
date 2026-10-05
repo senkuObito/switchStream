@@ -60,6 +60,12 @@ bool AddonManager::loadConfig(const std::string& configPath) {
         m_enableTorrents = false;
     }
 
+    if (doc.HasMember("suppress_stream_warning") && doc["suppress_stream_warning"].IsBool()) {
+        m_suppressStreamAddonWarning = doc["suppress_stream_warning"].GetBool();
+    } else {
+        m_suppressStreamAddonWarning = false;
+    }
+
     if (doc.HasMember("addons") && doc["addons"].IsArray()) {
         for (auto& a : doc["addons"].GetArray()) {
             if (!a.IsObject() || !a.HasMember("url")) continue;
@@ -134,6 +140,9 @@ bool AddonManager::saveConfig(const std::string& configPath) const {
     writer.Key("enable_torrents");
     writer.Bool(m_enableTorrents);
 
+    writer.Key("suppress_stream_warning");
+    writer.Bool(m_suppressStreamAddonWarning);
+
     writer.Key("addons");
     writer.StartArray();
     for (auto& addon : m_addons) {
@@ -163,7 +172,51 @@ std::vector<InstalledAddon> AddonManager::getAddons() const {
     return m_addons;
 }
 
+int AddonManager::getEnabledStreamAddonCount() const {
+    std::lock_guard<std::mutex> lock(m_addonsMutex);
+    int count = 0;
+    for (const auto& a : m_addons) {
+        if (!a.enabled) continue;
+
+        bool hasStreamResource = false;
+        for (const auto& r : a.manifest.resources) {
+            if (r.name == "stream") {
+                hasStreamResource = true;
+                break;
+            }
+        }
+        if (hasStreamResource) {
+            count++;
+            continue;
+        }
+
+        // If manifest resources are populated and none is "stream", it's definitely not a stream addon
+        if (!a.manifest.resources.empty()) {
+            continue;
+        }
+
+        // Fallback for addons whose manifest isn't fetched yet
+        std::string lowerUrl = a.transportUrl;
+        std::string lowerId = a.manifest.id;
+        for (char& c : lowerUrl) c = (char)tolower((unsigned char)c);
+        for (char& c : lowerId) c = (char)tolower((unsigned char)c);
+
+        if (lowerUrl.find("opensubtitles") != std::string::npos || lowerId.find("opensubtitles") != std::string::npos) continue;
+        if (lowerUrl.find("cinemeta") != std::string::npos || lowerId.find("cinemeta") != std::string::npos) continue;
+        if (lowerUrl.find("catalog") != std::string::npos || lowerId.find("catalog") != std::string::npos) continue;
+
+        if (lowerUrl.find("torrent") != std::string::npos || lowerUrl.find("stream") != std::string::npos ||
+            lowerId.find("torrent") != std::string::npos || lowerId.find("stream") != std::string::npos) {
+            count++;
+        }
+    }
+    return count;
+}
+
 bool AddonManager::installAddon(const std::string& transportUrl) {
+    // Reset warning suppression whenever addons are changed
+    m_suppressStreamAddonWarning = false;
+
     // Check if already installed by URL
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
@@ -197,6 +250,7 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
 }
 
 void AddonManager::addAddon(const InstalledAddon& addon) {
+    m_suppressStreamAddonWarning = false;
     std::lock_guard<std::mutex> lock(m_addonsMutex);
     for (const auto& a : m_addons) {
         if (a.transportUrl == addon.transportUrl) return;
@@ -206,6 +260,7 @@ void AddonManager::addAddon(const InstalledAddon& addon) {
 }
 
 void AddonManager::removeAddon(const std::string& addonId) {
+    m_suppressStreamAddonWarning = false;
     std::lock_guard<std::mutex> lock(m_addonsMutex);
     m_addons.erase(
         std::remove_if(m_addons.begin(), m_addons.end(),
@@ -215,6 +270,7 @@ void AddonManager::removeAddon(const std::string& addonId) {
 }
 
 void AddonManager::toggleAddon(const std::string& addonId) {
+    m_suppressStreamAddonWarning = false;
     std::lock_guard<std::mutex> lock(m_addonsMutex);
     // Toggle ALL entries with this ID — handles any lingering duplicates
     for (auto& a : m_addons) {

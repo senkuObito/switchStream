@@ -13,6 +13,8 @@
 #include <fstream>
 #include <regex>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
@@ -62,10 +64,18 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     {"CyberFlix Catalogs", "Movie and series catalogs sorted by streaming provider.", "https://cyberflix.elfhosted.com/manifest.json"},
     {"TMDB Collections", "Movie collections grouped by franchise.", "https://61ab9c85a149-tmdb-collections.baby-beamup.club/manifest.json"},
     {"Dramayo", "Asian dramas, series and movies catalog & streams.", "https://dramayo.stream/manifest.json"},
+    {"AnimeStream", "Anime streaming catalog and metadata provider.", "https://animestream-addon.keypop3750.workers.dev/manifest.json"},
 
     // --- Stream Addons (provide playable stream links) ---
     {"Torrentio", "Torrent streams from YTS, RARBG, 1337x, etc.", "https://torrentio.strem.fun/manifest.json"},
     {"Filtorrent", "Curated & shaped Torrentio + TorrentsDB streams with resolution filtering.", "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json"},
+    {"InMax", "Indian and regional movies & series streams from TamilMV / TamilBlasters.", "https://inmax-tmv.onrender.com/manifest.json"},
+    {"IndTorrents", "Indian torrent streams for regional movies and series.", "https://indtorrents.codecrafts.workers.dev/manifest.json"},
+    {"ThePirateBay+", "ThePirateBay+ torrent streams provider.", "https://thepiratebay-plus.strem.fun/manifest.json"},
+    {"TorrentsDB", "TorrentsDB multi-tracker torrent stream search.", "https://torrentsdb.com/manifest.json"},
+    {"StreamViX | ElfHosted", "StreamViX multi-source HTTP streams provider.", "https://streamvix.hayd.uk/manifest.json"},
+    {"NoDebrid", "Direct HTTP/HLS streams without requiring Debrid subscriptions.", "https://nodebrid.fly.dev/manifest.json"},
+    {"StreamAsia", "Asian drama, movie and series streams from Dramacool.", "https://stremio-dramacool-addon.xyz/manifest.json"},
     {"Flix Streams", "HTTP streams from multiple sources.", "https://flixnest.app/flix-streams/manifest.json"},
     {"Nebula Streams", "HTTP streams from multiple sources.", "https://nebulastreams.onrender.com/manifest.json"},
     {"MovieBox", "HTTP streams for movies and series.", "https://moviebox-cfa7.onrender.com/manifest.json"},
@@ -230,9 +240,10 @@ bool App::init() {
             bool isPengu = (tUrl.find("pengu") != std::string::npos || aName.find("pengu") != std::string::npos || aId.find("pengu") != std::string::npos);
             bool isKitsu = (tUrl.find("anime-kitsu") != std::string::npos || aName.find("kitsu") != std::string::npos || aId.find("kitsu") != std::string::npos);
             bool isAio = (tUrl.find("aiostream") != std::string::npos || aName.find("aiostream") != std::string::npos || aId.find("aiostream") != std::string::npos);
+            bool isMediaFusion = (tUrl.find("mediafusion") != std::string::npos || aName.find("mediafusion") != std::string::npos || aId.find("mediafusion") != std::string::npos);
 
-            if (isPengu || isKitsu || isAio) {
-                printf("[App] Removing deprecated addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
+            if (isPengu || isKitsu || isAio || isMediaFusion) {
+                printf("[App] Removing deprecated/removed addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
                 m_addonManager.removeAddon(a.transportUrl);
                 m_addonManager.removeAddon(a.manifest.id);
                 updatedAddons = true;
@@ -262,6 +273,15 @@ bool App::init() {
         }
     }
 
+    // QA Control: check if more than 5 stream addons are enabled on app open
+    if (m_addonManager.getEnabledStreamAddonCount() > 5 &&
+        !m_addonManager.getSuppressStreamAddonWarning()) {
+        m_showStreamWarningPopup = true;
+        m_streamWarningIndex = 0; // Focus "Cancel" by default
+        printf("[App] QA Control: %d stream addons enabled (> 5). Displaying performance advisory popup.\n",
+               m_addonManager.getEnabledStreamAddonCount());
+    }
+
     // 1. Try loading cached home catalogs from disk for instant startup (< 5ms)
     std::vector<CatalogRow> cachedRows;
     if (loadHomeCache(HOME_CACHE, cachedRows)) {
@@ -272,8 +292,8 @@ bool App::init() {
         printf("[App] Instantly loaded %zu home catalog rows from disk cache!\n", m_homeCatalogs.size());
     }
 
-    // 2. Fetch fresh home catalogs in the background
-    loadHomeCatalogs();
+    // 2. Fetch fresh home catalogs in the background (refreshed on app open)
+    loadHomeCatalogs(true);
 
 #ifdef __SWITCH__
     // Init controller
@@ -575,6 +595,34 @@ void App::run() {
 void App::handleInputForPad(u64 kDown) {
     switch (m_screen) {
     case Screen::HOME: {
+        if (m_showStreamWarningPopup) {
+            if (kDown & (HidNpadButton_Left | HidNpadButton_Right)) {
+                m_streamWarningIndex = 1 - m_streamWarningIndex;
+            }
+            if (kDown & HidNpadButton_B) {
+                // Cancel
+                m_showStreamWarningPopup = false;
+            }
+            if (kDown & HidNpadButton_X) {
+                // Don't show again
+                m_addonManager.setSuppressStreamAddonWarning(true);
+                m_addonManager.saveConfig(CONFIG_FILE);
+                m_showStreamWarningPopup = false;
+            }
+            if (kDown & HidNpadButton_A) {
+                if (m_streamWarningIndex == 0) {
+                    // Cancel
+                    m_showStreamWarningPopup = false;
+                } else {
+                    // Don't show again
+                    m_addonManager.setSuppressStreamAddonWarning(true);
+                    m_addonManager.saveConfig(CONFIG_FILE);
+                    m_showStreamWarningPopup = false;
+                }
+            }
+            break;
+        }
+
         std::vector<CatalogRow> localCatalogs;
         {
             std::lock_guard<std::mutex> lock(m_homeMutex);
@@ -882,6 +930,7 @@ void App::handleInputForPad(u64 kDown) {
                             m_installThread = std::thread([this, url]() {
                                 m_addonManager.installAddon(url);
                                 m_addonManager.saveConfig(CONFIG_FILE);
+                                loadHomeCatalogs(true);
                                 m_loading = false;
                             });
                         }
@@ -892,7 +941,7 @@ void App::handleInputForPad(u64 kDown) {
                 if (m_addonIndex >= 0 && m_addonIndex < (int)addons.size()) {
                     m_addonManager.toggleAddon(addons[m_addonIndex].manifest.id);
                     m_addonManager.saveConfig(CONFIG_FILE);
-                    loadHomeCatalogs(); // Refresh catalogs to hide/show catalog on home screen!
+                    loadHomeCatalogs(true); // Refresh catalogs immediately!
                 }
             }
         }
@@ -904,6 +953,7 @@ void App::handleInputForPad(u64 kDown) {
                     m_addonManager.removeAddon(addons[m_addonIndex].manifest.id);
                     m_addonManager.saveConfig(CONFIG_FILE);
                     if (m_addonIndex > 0) m_addonIndex--;
+                    loadHomeCatalogs(true); // Refresh catalogs immediately!
                 }
             }
         }
@@ -924,13 +974,13 @@ void App::handleInputForPad(u64 kDown) {
             if (!url.empty()) {
                 m_addonManager.installAddon(url);
                 m_addonManager.saveConfig(CONFIG_FILE);
-                loadHomeCatalogs();  // refresh
+                loadHomeCatalogs(true);  // refresh
             }
         }
 
         if (kDown & HidNpadButton_B) {
             m_screen = Screen::HOME;
-            loadHomeCatalogs();
+            loadHomeCatalogs(true);
         }
         break;
     }
@@ -1184,6 +1234,7 @@ void App::handleInputForPad(u64 kDown) {
                 }
             } else if (m_settingsIndex == 4) {
                 // Clean Cache & Reset
+                cleanCatalogImageCache();
                 std::remove(CONFIG_FILE);
                 std::remove(LIB_FILE);
                 m_library = Library();
@@ -1211,9 +1262,13 @@ void App::handleInputForPad(u64 kDown) {
                     }
                     m_addonManager.saveConfig(CONFIG_FILE);
                 }
+                {
+                    std::lock_guard<std::mutex> lock(m_homeMutex);
+                    m_homeCatalogs.clear();
+                }
                 m_settingsIndex = 0;
                 m_screen = Screen::HOME;
-                loadHomeCatalogs();
+                loadHomeCatalogs(true);
             } else if (m_settingsIndex == 5) {
                 m_screen = Screen::HOME;
             }
@@ -1232,6 +1287,35 @@ void App::handleTouch(int x, int y) {
 
     switch (m_screen) {
     case Screen::HOME: {
+        if (m_showStreamWarningPopup) {
+            int dw = 680, dh = 270;
+            int dx = (SCREEN_W - dw) / 2;
+            int dy = (SCREEN_H - dh) / 2;
+            int btnW = 240, btnH = 46;
+            int btnY = dy + 180;
+            int btn1X = dx + 65;
+            int btn2X = dx + dw - 65 - btnW;
+
+            if (x >= btn1X && x <= btn1X + btnW && y >= btnY && y <= btnY + btnH) {
+                // Cancel button clicked
+                m_showStreamWarningPopup = false;
+                return;
+            }
+            if (x >= btn2X && x <= btn2X + btnW && y >= btnY && y <= btnY + btnH) {
+                // Don't show again clicked
+                m_addonManager.setSuppressStreamAddonWarning(true);
+                m_addonManager.saveConfig(CONFIG_FILE);
+                m_showStreamWarningPopup = false;
+                return;
+            }
+            // Tap outside dialog box dismisses
+            if (x < dx || x > dx + dw || y < dy || y > dy + dh) {
+                m_showStreamWarningPopup = false;
+                return;
+            }
+            return;
+        }
+
         // ─── Header Navigation Click ───
         int navX = 280;
         if (y >= 10 && y <= 58) {
@@ -1558,7 +1642,7 @@ void App::handleTouch(int x, int y) {
     case Screen::ADDONS: {
         if (x >= 1100 && x <= 1220 && y >= 50 && y <= 75) {
             m_screen = Screen::HOME;
-            loadHomeCatalogs();
+            loadHomeCatalogs(true);
             return;
         }
 
@@ -1569,7 +1653,7 @@ void App::handleTouch(int x, int y) {
                 if (!url.empty()) {
                     m_addonManager.installAddon(url);
                     m_addonManager.saveConfig(CONFIG_FILE);
-                    loadHomeCatalogs();
+                    loadHomeCatalogs(true);
                 }
                 return;
             }
@@ -1591,9 +1675,9 @@ void App::handleTouch(int x, int y) {
             for (int i = startIndex; i < (int)addons.size() && (itemY + 60) <= (80 + 520 - 20); i++) {
                 if (x >= 45 && x <= 615 && y >= itemY - 2 && y <= itemY + 54) {
                     m_addonIndex = i;
-                    addons[i].enabled = !addons[i].enabled;
+                    m_addonManager.toggleAddon(addons[i].manifest.id);
                     m_addonManager.saveConfig(CONFIG_FILE);
-                    loadHomeCatalogs();
+                    loadHomeCatalogs(true);
                     return;
                 }
                 itemY += 60;
@@ -1614,7 +1698,7 @@ void App::handleTouch(int x, int y) {
                     m_addonDiscoverIndex = i;
                     m_addonManager.installAddon(DISCOVER_ADDONS[i].url);
                     m_addonManager.saveConfig(CONFIG_FILE);
-                    loadHomeCatalogs();
+                    loadHomeCatalogs(true);
                     return;
                 }
                 itemY += 60;
@@ -1657,6 +1741,7 @@ void App::handleTouch(int x, int y) {
                         m_addonManager.saveConfig(CONFIG_FILE);
                     }
                 } else if (m_settingsIndex == 4) {
+                    cleanCatalogImageCache();
                     std::remove(CONFIG_FILE);
                     std::remove(LIB_FILE);
                     m_library = Library();
@@ -1683,9 +1768,13 @@ void App::handleTouch(int x, int y) {
                         }
                         m_addonManager.saveConfig(CONFIG_FILE);
                     }
-                    m_imageCache->clear();
-                    loadHomeCatalogs();
+                    {
+                        std::lock_guard<std::mutex> lock(m_homeMutex);
+                        m_homeCatalogs.clear();
+                    }
+                    m_settingsIndex = 0;
                     m_screen = Screen::HOME;
+                    loadHomeCatalogs(true);
                 } else if (m_settingsIndex == 5) {
                     m_screen = Screen::HOME;
                 }
@@ -2059,12 +2148,21 @@ void App::render() {
     }
     for (const auto& img : localQueue) {
         SDL_Texture* tex = m_imageCache->store(img.url, img.data.data(), img.data.size());
-        if (!tex) {
+        if (tex) {
+            if (!img.titleKey.empty()) {
+                m_imageCache->addAlias(img.titleKey, img.url);
+            }
+        } else {
             std::lock_guard<std::mutex> lock(m_downloadedMutex);
+            if (!img.titleKey.empty()) m_failedPosters.insert(img.titleKey);
             m_failedPosters.insert(img.url);
             std::string cacheFile = getDiskCachePath(img.url);
             if (!cacheFile.empty()) {
                 std::remove(cacheFile.c_str());
+            }
+            if (!img.titleKey.empty()) {
+                std::string titleCache = getDiskCachePath(img.titleKey);
+                if (!titleCache.empty()) std::remove(titleCache.c_str());
             }
         }
     }
@@ -3296,6 +3394,45 @@ void App::renderHome() {
             }
         }
     }
+
+    // ─── QA Control: More than 5 Stream Addons Warning Modal ───
+    if (m_showStreamWarningPopup) {
+        // Dim background overlay
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 190});
+
+        int dw = 680, dh = 270;
+        int dx = (SCREEN_W - dw) / 2;
+        int dy = (SCREEN_H - dh) / 2;
+
+        // Modal card container
+        drawFilledRoundRect(dx, dy, dw, dh, 16, {20, 25, 38, 252});
+        drawRoundRect(dx, dy, dw, dh, 16, {255, 185, 0, 220}); // amber warning accent
+
+        // Warning title
+        drawTextCentered("⚠️  Performance Advisory", SCREEN_W / 2, dy + 25, {255, 190, 40, 255}, m_fontLarge);
+
+        // Warning message
+        drawTextCentered("More than 5 stream addons are configured which may slow", SCREEN_W / 2, dy + 82, TEXT_PRIMARY, m_fontNormal);
+        drawTextCentered("the overall performance.", SCREEN_W / 2, dy + 112, TEXT_SECONDARY, m_fontNormal);
+
+        // Buttons
+        int btnW = 240, btnH = 46;
+        int btnY = dy + 180;
+        int btn1X = dx + 65;
+        int btn2X = dx + dw - 65 - btnW;
+
+        // Button 1: Cancel
+        bool sel1 = (m_streamWarningIndex == 0);
+        drawFilledRoundRect(btn1X, btnY, btnW, btnH, 8, sel1 ? CARD_HL : CARD_COLOR);
+        drawRoundRect(btn1X, btnY, btnW, btnH, 8, sel1 ? ACCENT : SDL_Color{60, 70, 95, 255});
+        drawTextCentered("Cancel  [B]", btn1X + btnW / 2, btnY + 12, sel1 ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+
+        // Button 2: Don't show again
+        bool sel2 = (m_streamWarningIndex == 1);
+        drawFilledRoundRect(btn2X, btnY, btnW, btnH, 8, sel2 ? CARD_HL : CARD_COLOR);
+        drawRoundRect(btn2X, btnY, btnW, btnH, 8, sel2 ? ACCENT : SDL_Color{60, 70, 95, 255});
+        drawTextCentered("Don't show again  [X]", btn2X + btnW / 2, btnY + 12, sel2 ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+    }
 }
 
 void App::renderSearch() {
@@ -4137,7 +4274,7 @@ void App::drawSpinner(int cx, int cy, int radius) {
 }
 
 void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
-    if (item.poster.empty()) {
+    if (item.poster.empty() && item.name.empty()) {
         drawFilledRoundRect(x, y, w, h, 8, CARD_COLOR);
         drawRoundRect(x, y, w, h, 8, {38, 46, 64, 180});
         drawFilledRoundRect(x + w / 2 - 18, y + h / 2 - 18, 36, 36, 8, {32, 38, 54, 255});
@@ -4145,20 +4282,35 @@ void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
         return;
     }
 
-    SDL_Texture* tex = m_imageCache->get(item.poster);
+    std::string titleKey = normalizeTitleKey(item.name, item.type);
+
+    // 1. Try title-based cache in RAM first, then URL-based cache
+    SDL_Texture* tex = nullptr;
+    if (!titleKey.empty()) {
+        tex = m_imageCache->get(titleKey);
+    }
+    if (!tex && !item.poster.empty()) {
+        tex = m_imageCache->get(item.poster);
+    }
     if (tex) {
         SDL_Rect dst = {x, y, w, h};
         SDL_RenderCopy(m_renderer, tex, nullptr, &dst);
         return;
     }
 
-    // If it's already loading or failed, draw the placeholder and return
+    // 2. If it's already loading or failed, draw the placeholder and return
     bool isLoading = false;
     bool isFailed = false;
     {
         std::lock_guard<std::mutex> lock(m_downloadedMutex);
-        isLoading = (m_loadingPosters.find(item.poster) != m_loadingPosters.end());
-        isFailed = (m_failedPosters.find(item.poster) != m_failedPosters.end());
+        if ((!titleKey.empty() && m_failedPosters.find(titleKey) != m_failedPosters.end()) ||
+            (!item.poster.empty() && m_failedPosters.find(item.poster) != m_failedPosters.end())) {
+            isFailed = true;
+        }
+        if ((!titleKey.empty() && m_loadingPosters.find(titleKey) != m_loadingPosters.end()) ||
+            (!item.poster.empty() && m_loadingPosters.find(item.poster) != m_loadingPosters.end())) {
+            isLoading = true;
+        }
     }
 
     if (isFailed) {
@@ -4168,17 +4320,25 @@ void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
         return;
     }
 
-    if (!isLoading) {
+    if (!isLoading && !item.poster.empty()) {
         {
             std::lock_guard<std::mutex> lock(m_downloadedMutex);
+            if (!titleKey.empty()) m_loadingPosters.insert(titleKey);
             m_loadingPosters.insert(item.poster);
         }
 
         // Add to download queue
         {
             std::lock_guard<std::mutex> lock(m_downloadQueueMutex);
-            if (std::find(m_downloadQueue.begin(), m_downloadQueue.end(), item.poster) == m_downloadQueue.end()) {
-                m_downloadQueue.push_back(item.poster);
+            bool alreadyQueued = false;
+            for (const auto& job : m_downloadQueue) {
+                if (job.url == item.poster || (!titleKey.empty() && job.titleKey == titleKey)) {
+                    alreadyQueued = true;
+                    break;
+                }
+            }
+            if (!alreadyQueued) {
+                m_downloadQueue.push_back({item.poster, titleKey});
                 m_downloadQueueCV.notify_one();
             }
         }
@@ -4190,9 +4350,20 @@ void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
     drawSpinner(x + w / 2, y + h / 2, 16);
 }
 
-static std::string urlToHash(const std::string& url) {
+std::string App::normalizeTitleKey(const std::string& title, const std::string& type) {
+    if (title.empty()) return "";
+    std::string norm = type.empty() ? "title:" : (type + ":");
+    for (char c : title) {
+        if (isalnum((unsigned char)c)) {
+            norm += (char)tolower((unsigned char)c);
+        }
+    }
+    return norm;
+}
+
+static std::string urlToHash(const std::string& key) {
     uint64_t hash = 14695981039346656037ULL;
-    for (char c : url) {
+    for (char c : key) {
         hash ^= (uint64_t)(unsigned char)c;
         hash *= 1099511628211ULL;
     }
@@ -4201,9 +4372,9 @@ static std::string urlToHash(const std::string& url) {
     return std::string(buf);
 }
 
-std::string App::getDiskCachePath(const std::string& url) {
-    if (url.empty()) return "";
-    return std::string(CACHE_DIR) + "/" + urlToHash(url) + ".cache";
+std::string App::getDiskCachePath(const std::string& key) {
+    if (key.empty()) return "";
+    return std::string(CACHE_DIR) + "/" + urlToHash(key) + ".cache";
 }
 
 bool App::readDiskCache(const std::string& path, std::string& outData) {
@@ -4230,9 +4401,19 @@ void App::prequeuePosters(const std::vector<CatalogRow>& rows, int maxRows) {
     for (int r = 0; r < (int)rows.size() && r < maxRows; ++r) {
         for (const auto& item : rows[r].items) {
             if (item.poster.empty()) continue;
+            std::string titleKey = normalizeTitleKey(item.name, item.type);
+            if (m_imageCache && !titleKey.empty() && m_imageCache->has(titleKey)) continue;
             if (m_imageCache && m_imageCache->has(item.poster)) continue;
-            if (std::find(m_downloadQueue.begin(), m_downloadQueue.end(), item.poster) == m_downloadQueue.end()) {
-                m_downloadQueue.push_back(item.poster);
+
+            bool alreadyQueued = false;
+            for (const auto& job : m_downloadQueue) {
+                if (job.url == item.poster || (!titleKey.empty() && job.titleKey == titleKey)) {
+                    alreadyQueued = true;
+                    break;
+                }
+            }
+            if (!alreadyQueued) {
+                m_downloadQueue.push_back({item.poster, titleKey});
             }
         }
     }
@@ -4322,61 +4503,117 @@ bool App::loadHomeCache(const std::string& path, std::vector<CatalogRow>& outCat
 
 void App::downloadWorkerLoop() {
     while (m_downloadWorkerRunning) {
-        std::string url;
+        DownloadJob job;
         {
             std::unique_lock<std::mutex> lock(m_downloadQueueMutex);
             m_downloadQueueCV.wait(lock, [this]() {
                 return !m_downloadQueue.empty() || !m_downloadWorkerRunning;
             });
             if (!m_downloadWorkerRunning) break;
-            url = m_downloadQueue.front();
+            job = m_downloadQueue.front();
             m_downloadQueue.erase(m_downloadQueue.begin());
         }
 
-        std::string cacheFile = getDiskCachePath(url);
+        std::string titleCacheFile;
+        if (!job.titleKey.empty()) {
+            titleCacheFile = getDiskCachePath(job.titleKey);
+        }
+        std::string urlCacheFile = getDiskCachePath(job.url);
+
         std::string imgData;
         bool loadedFromDisk = false;
 
-        // 1. Check persistent SD card disk cache first
-        if (!cacheFile.empty() && readDiskCache(cacheFile, imgData)) {
+        // 1. Check title-based disk cache first!
+        if (!titleCacheFile.empty() && readDiskCache(titleCacheFile, imgData)) {
             loadedFromDisk = true;
         }
 
-        // 2. If not on disk, download via HTTP with 10s timeout using dedicated image client
-        if (!loadedFromDisk) {
-            auto resp = m_imageHttp.downloadBytes(url, 10);
+        // 2. Check url-based disk cache second
+        if (!loadedFromDisk && !urlCacheFile.empty() && readDiskCache(urlCacheFile, imgData)) {
+            loadedFromDisk = true;
+        }
+
+        // 3. If not on disk, download via HTTP with 10s timeout using dedicated image client
+        if (!loadedFromDisk && !job.url.empty()) {
+            auto resp = m_imageHttp.downloadBytes(job.url, 10);
             if (resp.ok() && resp.body.size() >= 128) {
                 imgData = std::move(resp.body);
-                if (!cacheFile.empty()) {
-                    writeDiskCache(cacheFile, imgData);
+                // Save to disk by title key AND url key so next load instantly hits disk cache!
+                if (!titleCacheFile.empty()) {
+                    writeDiskCache(titleCacheFile, imgData);
+                }
+                if (!urlCacheFile.empty()) {
+                    writeDiskCache(urlCacheFile, imgData);
                 }
             }
         }
 
-        // 3. Dispatch to main thread for texture creation
-        std::lock_guard<std::mutex> lock(m_downloadedMutex);
-        m_loadingPosters.erase(url);
-        if (!imgData.empty()) {
-            DownloadedImage img;
-            img.url = url;
-            img.data = std::move(imgData);
-            m_downloadedQueue.push_back(std::move(img));
-        } else {
-            m_failedPosters.insert(url);
+        // 4. Dispatch to main thread for texture creation
+        {
+            std::lock_guard<std::mutex> lock(m_downloadedMutex);
+            if (!job.titleKey.empty()) m_loadingPosters.erase(job.titleKey);
+            m_loadingPosters.erase(job.url);
+            if (!imgData.empty()) {
+                DownloadedImage img;
+                img.url = job.url;
+                img.titleKey = job.titleKey;
+                img.data = std::move(imgData);
+                m_downloadedQueue.push_back(std::move(img));
+            } else {
+                if (!job.titleKey.empty()) m_failedPosters.insert(job.titleKey);
+                m_failedPosters.insert(job.url);
+            }
         }
     }
 }
 
+// ─── Cache Management ────────────────────────
+void App::cleanCatalogImageCache() {
+    DIR* dir = opendir(CACHE_DIR);
+    if (dir) {
+        struct dirent* ent;
+        while ((ent = readdir(dir)) != nullptr) {
+            std::string name = ent->d_name;
+            if (name == "." || name == "..") continue;
+            std::string fullPath = std::string(CACHE_DIR) + "/" + name;
+            unlink(fullPath.c_str());
+        }
+        closedir(dir);
+    }
+    std::remove(HOME_CACHE);
+    if (m_imageCache) {
+        m_imageCache->clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_downloadedMutex);
+        m_failedPosters.clear();
+        m_loadingPosters.clear();
+        m_downloadedQueue.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_downloadQueueMutex);
+        m_downloadQueue.clear();
+    }
+    printf("[App] Catalog image cache and home cache cleaned successfully.\n");
+}
+
 // ─── Data loading ────────────────────────────
 
-void App::loadHomeCatalogs() {
-    if (m_loadingHome) return;
-    if (m_homeLoadingThread.joinable()) {
-        // Cancel in-flight HTTP so the join returns immediately (~1s max)
+void App::loadHomeCatalogs(bool force) {
+    if (m_loadingHome) {
+        if (!force) return;
         m_http.cancel();
-        m_homeLoadingThread.join();
-        m_http.reset(); // allow future requests
+        if (m_homeLoadingThread.joinable()) {
+            m_homeLoadingThread.join();
+        }
+        m_http.reset();
+        m_loadingHome = false;
+    } else {
+        if (m_homeLoadingThread.joinable()) {
+            m_homeLoadingThread.join();
+        }
     }
+
     m_loadingHome = true;
     m_homeLoadingThread = std::thread([this]() {
         auto catalogs = m_addonManager.getHomeCatalogs();
@@ -5268,7 +5505,7 @@ void App::handleLongPress(int x, int y) {
                     m_addonManager.removeAddon(addonId);
                     m_addonManager.saveConfig(CONFIG_FILE);
                     if (m_addonIndex > 0) m_addonIndex--;
-                    loadHomeCatalogs();
+                    loadHomeCatalogs(true);
                     printf("[Touch] LongPress ADDONS removed addon ID: %s\n", addonId.c_str());
                     return;
                 }

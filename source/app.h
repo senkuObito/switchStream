@@ -63,7 +63,8 @@ private:
     void handleInput();
     void openSwkbd(std::string& output, const std::string& header = "");
 
-    void loadHomeCatalogs();
+    void loadHomeCatalogs(bool force = false);
+    void cleanCatalogImageCache();
     void performSearch(const std::string& query);
     void sortSearchResults();
     void loadDetail(const std::string& type, const std::string& id);
@@ -209,6 +210,10 @@ private:
     bool m_showQualityList = false;
     int m_qualityListIndex = 0;
 
+    // Stream Addon Performance Warning Modal Popup state
+    bool m_showStreamWarningPopup = false;
+    int m_streamWarningIndex = 0; // 0 = Cancel, 1 = Don't Show Again
+
 #ifdef __SWITCH__
     static constexpr const char* DATA_DIR    = "sdmc:/switch/switchstream/";
     static constexpr const char* CONFIG_FILE = "sdmc:/switch/switchstream/addons.json";
@@ -223,8 +228,14 @@ private:
     static constexpr const char* HOME_CACHE  = "./switchstream_data/home_cache.json";
 #endif
 
+    struct DownloadJob {
+        std::string url;
+        std::string titleKey;
+    };
+
     struct DownloadedImage {
         std::string url;
+        std::string titleKey;
         std::string data;
     };
     std::vector<DownloadedImage> m_downloadedQueue;
@@ -234,13 +245,14 @@ private:
 
     static constexpr int NUM_DOWNLOAD_WORKERS = 6;
     std::mutex m_downloadQueueMutex;
-    std::vector<std::string> m_downloadQueue;
+    std::vector<DownloadJob> m_downloadQueue;
     std::vector<std::thread> m_downloadWorkers;
     bool m_downloadWorkerRunning = false;
     std::condition_variable m_downloadQueueCV;
     void downloadWorkerLoop();
 
-    std::string getDiskCachePath(const std::string& url);
+    static std::string normalizeTitleKey(const std::string& title, const std::string& type);
+    std::string getDiskCachePath(const std::string& key);
     bool readDiskCache(const std::string& path, std::string& outData);
     void writeDiskCache(const std::string& path, const std::string& data);
     void prequeuePosters(const std::vector<CatalogRow>& rows, int maxRows = 3);

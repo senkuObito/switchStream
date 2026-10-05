@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_map>
 #include <list>
+#include <memory>
 #include <cstdint>
 
 struct SDL_Texture;
@@ -20,7 +21,7 @@ public:
     ImageCache(SDL_Renderer* renderer, int maxCacheMB = 128);
     ~ImageCache();
 
-    // Get texture for URL. Returns nullptr if not cached.
+    // Get texture for URL or title key. Returns nullptr if not cached.
     // Caller must NOT free the texture.
     SDL_Texture* get(const std::string& url);
 
@@ -28,7 +29,10 @@ public:
     // Returns the created texture (owned by cache)
     SDL_Texture* store(const std::string& url, const void* data, size_t dataSize);
 
-    // Check if URL is in cache
+    // Link an alias key (e.g. titleKey) to an already-cached target key (e.g. url) without duplicating memory
+    void addAlias(const std::string& aliasKey, const std::string& targetKey);
+
+    // Check if URL or title key is in cache
     bool has(const std::string& url) const;
 
     // Clear entire cache
@@ -39,7 +43,7 @@ public:
 
 private:
     struct CacheEntry {
-        SDL_Texture* texture;
+        std::shared_ptr<SDL_Texture> texture;
         int width;
         int height;
         size_t estimatedBytes;

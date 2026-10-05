@@ -157,6 +157,7 @@ struct AppConfig {
     bool hwDecode = true;
     std::string subtitleLang = "en";
     int uiScale = 100;         // percentage
+    bool suppressStreamAddonWarning = false;
 };
 
 // ─── UI State ────────────────────────────────

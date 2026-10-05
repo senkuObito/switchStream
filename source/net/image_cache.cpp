@@ -26,7 +26,7 @@ SDL_Texture* ImageCache::get(const std::string& url) {
     m_lruOrder.push_front(url);
     it->second.second = m_lruOrder.begin();
 
-    return it->second.first.texture;
+    return it->second.first.texture.get();
 }
 
 SDL_Texture* ImageCache::store(const std::string& url, const void* data, size_t dataSize) {
@@ -57,13 +57,17 @@ SDL_Texture* ImageCache::store(const std::string& url, const void* data, size_t 
         }
     }
 
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(m_renderer, targetSurface);
+    SDL_Texture* rawTex = SDL_CreateTextureFromSurface(m_renderer, targetSurface);
     int w = targetSurface->w;
     int h = targetSurface->h;
     if (downscaled) SDL_FreeSurface(downscaled);
     SDL_FreeSurface(surface);
 
-    if (!texture) return nullptr;
+    if (!rawTex) return nullptr;
+
+    std::shared_ptr<SDL_Texture> texture(rawTex, [](SDL_Texture* t) {
+        if (t) SDL_DestroyTexture(t);
+    });
 
     // Estimate memory: width * height * 4 bytes (RGBA)
     size_t estimatedBytes = static_cast<size_t>(w) * h * 4;
@@ -77,7 +81,24 @@ SDL_Texture* ImageCache::store(const std::string& url, const void* data, size_t 
     m_cache[url] = { entry, m_lruOrder.begin() };
     m_currentBytes += estimatedBytes;
 
-    return texture;
+    return texture.get();
+}
+
+void ImageCache::addAlias(const std::string& aliasKey, const std::string& targetKey) {
+    if (aliasKey.empty() || aliasKey == targetKey) return;
+    auto it = m_cache.find(targetKey);
+    if (it == m_cache.end()) return;
+
+    auto existing = m_cache.find(aliasKey);
+    if (existing != m_cache.end()) {
+        m_lruOrder.erase(existing->second.second);
+        m_cache.erase(existing);
+    }
+
+    m_lruOrder.push_front(aliasKey);
+    CacheEntry entry = it->second.first;
+    entry.estimatedBytes = 0; // Already accounted for in targetKey
+    m_cache[aliasKey] = { entry, m_lruOrder.begin() };
 }
 
 bool ImageCache::has(const std::string& url) const {
@@ -85,11 +106,6 @@ bool ImageCache::has(const std::string& url) const {
 }
 
 void ImageCache::clear() {
-    for (auto& pair : m_cache) {
-        if (pair.second.first.texture) {
-            SDL_DestroyTexture(pair.second.first.texture);
-        }
-    }
     m_cache.clear();
     m_lruOrder.clear();
     m_currentBytes = 0;
@@ -105,9 +121,6 @@ void ImageCache::evictIfNeeded(size_t newEntryBytes) {
         const std::string& lruUrl = m_lruOrder.back();
         auto it = m_cache.find(lruUrl);
         if (it != m_cache.end()) {
-            if (it->second.first.texture) {
-                SDL_DestroyTexture(it->second.first.texture);
-            }
             m_currentBytes -= it->second.first.estimatedBytes;
             m_cache.erase(it);
         }

@@ -84,6 +84,12 @@ public:
     bool getEnableTorrents() const { return m_enableTorrents; }
     void setEnableTorrents(bool enable) { m_enableTorrents = enable; }
 
+    bool getSuppressStreamAddonWarning() const { return m_suppressStreamAddonWarning; }
+    void setSuppressStreamAddonWarning(bool suppress) { m_suppressStreamAddonWarning = suppress; }
+
+    // Count enabled stream-providing addons (excluding catalog-only or subtitle-only addons)
+    int getEnabledStreamAddonCount() const;
+
 private:
     // Ensure manifest is fetched on the fly if it failed at startup
     void ensureManifest(InstalledAddon& addon);
@@ -101,6 +107,7 @@ private:
     bool m_hwDecode = true;
     std::string m_subtitleLang = "en";
     bool m_enableTorrents = false; // Default: false (completely independent streaming by default)
+    bool m_suppressStreamAddonWarning = false;
 };
 
 } // namespace ss
