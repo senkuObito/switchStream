@@ -55,6 +55,7 @@ private:
     void drawFilledRect(int x, int y, int w, int h, SDL_Color color);
     void drawRoundRect(int x, int y, int w, int h, int r, SDL_Color color);
     void drawFilledRoundRect(int x, int y, int w, int h, int r, SDL_Color color);
+    void maskRoundedCorners(int x, int y, int w, int h, int r, SDL_Color bgColor);
     void drawSpinner(int cx, int cy, int radius);
     void drawPoster(const MetaItem& item, int x, int y, int w, int h);
     void drawNavBar();

@@ -20,20 +20,23 @@
 static constexpr int SCREEN_W = 1280;
 static constexpr int SCREEN_H = 720;
 
-// Color palette — true black theme
-static constexpr SDL_Color BG_COLOR      = {0,  0,  0,   255}; // true black
-static constexpr SDL_Color CARD_COLOR    = {8,  8,  8,   255}; // near-black card
-static constexpr SDL_Color CARD_HL       = {28, 28, 40,  255}; // dark highlight
-static constexpr SDL_Color ACCENT        = {100, 120, 255, 255};
-static constexpr SDL_Color TEXT_PRIMARY   = {240, 240, 245, 255};
-static constexpr SDL_Color TEXT_SECONDARY = {150, 150, 170, 255};
-static constexpr SDL_Color NAV_BG        = {0,  0,  0,   255}; // true black
+// Color palette — modern dark slate theme
+static constexpr SDL_Color BG_COLOR       = {14,  17,  24,  255}; // deep midnight navy (#0e1118)
+static constexpr SDL_Color CARD_COLOR     = {22,  27,  38,  255}; // modern dark card (#161b26)
+static constexpr SDL_Color CARD_HL        = {32,  40,  56,  255}; // dark highlight
+static constexpr SDL_Color ACCENT         = {0,   229, 255, 255}; // vibrant electric cyan (#00e5ff)
+static constexpr SDL_Color ACCENT_MUTED   = {0,   160, 190, 255}; // muted cyan
+static constexpr SDL_Color TEXT_PRIMARY    = {245, 248, 255, 255}; // crisp bright white
+static constexpr SDL_Color TEXT_SECONDARY  = {145, 158, 180, 255}; // soft slate gray
+static constexpr SDL_Color NAV_BG         = {14,  17,  24,  255};
+static constexpr SDL_Color NAV_CONTAINER  = {22,  27,  39,  240}; // pill container (#161b27)
+static constexpr SDL_Color NAV_BORDER     = {42,  50,  72,  180}; // pill border (#2a3248)
 
 // Poster dimensions
 static constexpr int POSTER_W = 150;
 static constexpr int POSTER_H = 225;
 static constexpr int POSTER_GAP = 16;
-static constexpr int ROW_HEIGHT = 280;
+static constexpr int ROW_HEIGHT = 286;
 
 struct DiscoverAddon {
     std::string name;
@@ -581,6 +584,14 @@ void App::handleInputForPad(u64 kDown) {
             m_settingsIndex = 0;
             m_screen = Screen::SETTINGS;
         }
+        if (kDown & HidNpadButton_B) {
+            if (m_homeRowIndex != 0 || m_homeColIndex != 0) {
+                m_homeRowIndex = 0;
+                m_homeColIndex = 0;
+            } else {
+                loadHomeCatalogs();
+            }
+        }
         break;
     }
 
@@ -1053,9 +1064,16 @@ void App::handleTouch(int x, int y) {
     switch (m_screen) {
     case Screen::HOME: {
         // ─── Header Navigation Click ───
-        // "[Y] Search   [L] Library   [R] Addons   [X] Settings   [+] Exit"
-        if (y >= 10 && y <= 45) {
-            if (x >= 400 && x < 490) {
+        int navX = 280;
+        if (y >= 10 && y <= 58) {
+            if (x >= navX && x < navX + 100) {
+                // Home tab
+                m_homeRowIndex = 0;
+                m_homeColIndex = 0;
+                return;
+            }
+            if (x >= navX + 104 && x < navX + 214) {
+                // Search tab
                 std::string query;
                 openSwkbd(query, "Search movies & series");
                 if (!query.empty()) {
@@ -1065,20 +1083,20 @@ void App::handleTouch(int x, int y) {
                 }
                 return;
             }
-            if (x >= 500 && x < 610) {
+            if (x >= navX + 218 && x < navX + 328) {
                 m_screen = Screen::LIBRARY;
                 return;
             }
-            if (x >= 620 && x < 720) {
+            if (x >= navX + 332 && x < navX + 442) {
                 m_screen = Screen::ADDONS;
                 return;
             }
-            if (x >= 730 && x < 850) {
+            if (x >= navX + 446 && x < navX + 576) {
                 m_settingsIndex = 0;
                 m_screen = Screen::SETTINGS;
                 return;
             }
-            if (x >= 860 && x < 950) {
+            if (x >= SCREEN_W - 140 && x <= SCREEN_W - 20) {
                 m_running = false;
                 return;
             }
@@ -1092,7 +1110,7 @@ void App::handleTouch(int x, int y) {
         }
         if (localCatalogs.empty() || m_loadingHome) return;
 
-        int startY = 70;
+        int startY = 74;
         int visibleRows = 2;
         int firstRow = m_homeRowIndex > 0 ? m_homeRowIndex - 1 : 0;
         int maxVisibleCols = (SCREEN_W - 80) / (POSTER_W + POSTER_GAP);
@@ -1100,7 +1118,7 @@ void App::handleTouch(int x, int y) {
         for (int r = firstRow; r < (int)localCatalogs.size() && r < firstRow + visibleRows + 1; r++) {
             auto& row = localCatalogs[r];
             int rowY = startY + (r - firstRow) * ROW_HEIGHT;
-            int cardY = rowY + 30;
+            int cardY = rowY + 34;
 
             int startCol = 0;
             if (r == m_homeRowIndex && m_homeColIndex >= maxVisibleCols)
@@ -2217,13 +2235,81 @@ void App::renderPlayer() {
     }
 }
 
+static std::string formatCatalogTitle(const std::string& addonName, const std::string& catalogName) {
+    if (addonName == "yastream") {
+        std::string lowerC = catalogName;
+        for (char& c : lowerC) c = (char)tolower((unsigned char)c);
+        if (lowerC.find("kisskh") != std::string::npos) return "Asian & K-Dramas (KissKH)";
+        if (lowerC.find("onetouchtv") != std::string::npos) return "Asian & K-Dramas (OneTouchTV)";
+        return "Asian & K-Dramas (yastream)";
+    }
+    if (addonName.find("K-Drama Crush") != std::string::npos || addonName.find("kdrama") != std::string::npos) {
+        return "Trending K-Dramas (K-Drama Crush)";
+    }
+    if (addonName == "Cinemeta") {
+        std::string lowerC = catalogName;
+        for (char& c : lowerC) c = (char)tolower((unsigned char)c);
+        if (lowerC.find("movie") != std::string::npos || lowerC.find("top") != std::string::npos) return "Popular Movies";
+        if (lowerC.find("series") != std::string::npos) return "Trending Series";
+        return "Cinemeta — " + catalogName;
+    }
+    if (addonName == "CyberFlix Catalogs") {
+        return "CyberFlix — " + catalogName;
+    }
+
+    // Clean up [addonName] prefix if present in catalogName
+    std::string cleanCat = catalogName;
+    std::string tag = "[" + addonName + "]";
+    size_t tagPos = cleanCat.find(tag);
+    if (tagPos != std::string::npos) {
+        cleanCat.erase(tagPos, tag.size());
+        while (!cleanCat.empty() && (cleanCat[0] == ' ' || cleanCat[0] == '-')) cleanCat.erase(0, 1);
+    }
+    return addonName + " — " + cleanCat;
+}
+
 void App::renderHome() {
-    drawText("SwitchStream", 40, 20, ACCENT, m_fontLarge);
-    drawText("[Y] Search   [L] Library   [R] Addons   [X] Settings   [+] Exit",
-             400, 28, TEXT_SECONDARY, m_fontSmall);
+    // 1. Brand Logo
+    drawText("SwitchStream", 40, 18, TEXT_PRIMARY, m_fontLarge);
+
+    // 2. Top Navigation Pill Bar
+    int navX = 280, navY = 14, navW = 580, navH = 40;
+    drawFilledRoundRect(navX, navY, navW, navH, 20, NAV_CONTAINER);
+    drawRoundRect(navX, navY, navW, navH, 20, NAV_BORDER);
+
+    // Tab 0: Home (Active)
+    int tab0X = navX + 4;
+    int tab0W = 96;
+    drawFilledRoundRect(tab0X, navY + 4, tab0W, navH - 8, 16, ACCENT);
+    drawTextCentered("Home", tab0X + tab0W / 2, navY + 9, {10, 14, 22, 255}, m_fontNormal);
+
+    // Tab 1: Search
+    int tab1X = navX + 104;
+    int tab1W = 110;
+    drawTextCentered("Search [Y]", tab1X + tab1W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+
+    // Tab 2: Library
+    int tab2X = navX + 218;
+    int tab2W = 110;
+    drawTextCentered("Library [L]", tab2X + tab2W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+
+    // Tab 3: Addons
+    int tab3X = navX + 332;
+    int tab3W = 110;
+    drawTextCentered("Addons [R]", tab3X + tab3W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+
+    // Tab 4: Settings
+    int tab4X = navX + 446;
+    int tab4W = 126;
+    drawTextCentered("Settings [X]", tab4X + tab4W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+
+    // Right quick exit badge
+    drawFilledRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {26, 32, 46, 200});
+    drawRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {44, 52, 74, 180});
+    drawTextCentered("[+] Exit", SCREEN_W - 85, 23, TEXT_SECONDARY, m_fontSmall);
 
     if (m_loadingHome) {
-        drawSpinner(SCREEN_W/2, SCREEN_H/2 - 40, 22);
+        drawSpinner(SCREEN_W/2, SCREEN_H/2 - 40, 24);
         drawTextCentered("Loading catalogs...", SCREEN_W/2, SCREEN_H/2 + 25, TEXT_SECONDARY);
         return;
     }
@@ -2240,19 +2326,24 @@ void App::renderHome() {
         return;
     }
 
-    int startY = 70;
-    // Only render visible rows (lightweight)
+    int startY = 74;
     int visibleRows = 2;
     int firstRow = m_homeRowIndex > 0 ? m_homeRowIndex - 1 : 0;
 
     for (int r = firstRow; r < (int)localCatalogs.size() && r < firstRow + visibleRows + 1; r++) {
         auto& row = localCatalogs[r];
         int y = startY + (r - firstRow) * ROW_HEIGHT;
-        if (y > SCREEN_H) break;
+        if (y + 40 > SCREEN_H - 40) break;
 
-        // Row title
-        std::string title = row.addonName + " — " + row.catalogName;
-        drawText(title, 40, y, (r == m_homeRowIndex) ? ACCENT : TEXT_PRIMARY, m_fontNormal);
+        // Clean, polished catalog title
+        std::string title = formatCatalogTitle(row.addonName, row.catalogName);
+        if (r == m_homeRowIndex) {
+            // Glowing cyan accent bar for active row
+            drawFilledRoundRect(40, y + 3, 4, 22, 2, ACCENT);
+            drawText(title, 52, y, TEXT_PRIMARY, m_fontLarge);
+        } else {
+            drawText(title, 40, y + 3, TEXT_SECONDARY, m_fontNormal);
+        }
 
         // Poster cards
         int x = 40;
@@ -2263,31 +2354,37 @@ void App::renderHome() {
 
         for (int c = startCol; c < (int)row.items.size() && c < startCol + maxVisible; c++) {
             int cardX = x + (c - startCol) * (POSTER_W + POSTER_GAP);
-            int cardY = y + 30;
+            int cardY = y + 34;
             bool selected = (r == m_homeRowIndex && c == m_homeColIndex);
 
-            // Card background
-            SDL_Color cardBg = selected ? CARD_HL : CARD_COLOR;
-            drawFilledRect(cardX - 4, cardY - 4, POSTER_W + 8, POSTER_H + 8, cardBg);
+            // 1. Base card background
+            drawFilledRoundRect(cardX, cardY, POSTER_W, POSTER_H, 8, CARD_COLOR);
 
-            // Draw actual poster image
+            // 2. Poster image
             drawPoster(row.items[c], cardX, cardY, POSTER_W, POSTER_H);
+            maskRoundedCorners(cardX, cardY, POSTER_W, POSTER_H, 8, BG_COLOR);
 
-            // Overlay name at bottom of card
+            // 3. Smooth dark overlay band for readable title at bottom
+            drawFilledRect(cardX, cardY + POSTER_H - 36, POSTER_W, 36, {10, 14, 22, 225});
+            drawFilledRect(cardX, cardY + POSTER_H - 40, POSTER_W, 4, {10, 14, 22, 120});
+            maskRoundedCorners(cardX, cardY, POSTER_W, POSTER_H, 8, BG_COLOR);
+
+            // 4. Centered title with ellipsis
             std::string name = row.items[c].name;
-            if (name.size() > 18) name = name.substr(0, 16) + "..";
-            // Draw a subtle dark semi-transparent band for readability
-            drawFilledRect(cardX, cardY + POSTER_H - 30, POSTER_W, 30, {0, 0, 0, 180});
-            drawText(name, cardX + 4, cardY + POSTER_H - 24, TEXT_PRIMARY, m_fontSmall);
+            if (name.size() > 19) name = name.substr(0, 17) + "..";
+            drawTextCentered(name, cardX + POSTER_W / 2, cardY + POSTER_H - 26, TEXT_PRIMARY, m_fontSmall);
 
+            // 5. Border: Glowing Cyan on selected, sleek dark border on unselected
             if (selected) {
-                drawRect(cardX - 4, cardY - 4, POSTER_W + 8, POSTER_H + 8, ACCENT);
+                drawRoundRect(cardX - 3, cardY - 3, POSTER_W + 6, POSTER_H + 6, 11, {0, 229, 255, 60});
+                drawRoundRect(cardX - 2, cardY - 2, POSTER_W + 4, POSTER_H + 4, 10, {0, 229, 255, 140});
+                drawRoundRect(cardX - 1, cardY - 1, POSTER_W + 2, POSTER_H + 2, 9,  ACCENT);
+                drawRoundRect(cardX, cardY, POSTER_W, POSTER_H, 8, ACCENT);
+            } else {
+                drawRoundRect(cardX, cardY, POSTER_W, POSTER_H, 8, {38, 46, 64, 180});
             }
         }
     }
-
-    // Draw Author Legend
-    drawText("Author: Antigravity", SCREEN_W - 180, SCREEN_H - 30, {100, 100, 120, 255}, m_fontSmall);
 }
 
 void App::renderSearch() {
@@ -2790,9 +2887,70 @@ void App::renderSettings() {
 }
 
 void App::drawNavBar() {
-    drawFilledRect(0, SCREEN_H - 40, SCREEN_W, 40, NAV_BG);
-    drawText("[A] Select  [B] Back  [Y] Search  [+] Exit",
-             40, SCREEN_H - 32, TEXT_SECONDARY, m_fontSmall);
+    int barY = SCREEN_H - 38;
+    int barH = 38;
+
+    // Background bar
+    drawFilledRect(0, barY, SCREEN_W, barH, {12, 16, 24, 245});
+    drawFilledRect(0, barY, SCREEN_W, 1, {32, 40, 58, 255}); // 1px subtle top border
+
+    auto drawBtnPrompt = [this](const std::string& btn, const std::string& label, int x, int y) -> int {
+        int btnW = std::max(22, (int)btn.size() * 10 + 10);
+        int btnH = 20;
+        // Button pill
+        drawFilledRoundRect(x, y - 2, btnW, btnH, btnH / 2, {36, 44, 62, 255});
+        drawRoundRect(x, y - 2, btnW, btnH, btnH / 2, {60, 72, 98, 255});
+        drawTextCentered(btn, x + btnW / 2, y, {240, 245, 255, 255}, m_fontSmall);
+
+        // Label
+        drawText(label, x + btnW + 7, y, TEXT_SECONDARY, m_fontSmall);
+        int labelW = (int)label.size() * 8 + 18;
+        return x + btnW + labelW;
+    };
+
+    int curX = 40;
+    int curY = barY + 9;
+
+    switch (m_screen) {
+    case Screen::HOME:
+        curX = drawBtnPrompt("A", "Select", curX, curY);
+        curX = drawBtnPrompt("B", "Refresh", curX, curY);
+        curX = drawBtnPrompt("Y", "Search", curX, curY);
+        curX = drawBtnPrompt("L/R", "Tabs", curX, curY);
+        curX = drawBtnPrompt("+", "Exit", curX, curY);
+        break;
+    case Screen::SEARCH:
+        curX = drawBtnPrompt("A", "Select", curX, curY);
+        curX = drawBtnPrompt("B", "Back", curX, curY);
+        curX = drawBtnPrompt("X", "Sort", curX, curY);
+        curX = drawBtnPrompt("Y", "New Search", curX, curY);
+        break;
+    case Screen::DETAIL:
+        curX = drawBtnPrompt("A", "Play Stream", curX, curY);
+        curX = drawBtnPrompt("B", "Back", curX, curY);
+        curX = drawBtnPrompt("X", "Bookmark", curX, curY);
+        break;
+    case Screen::LIBRARY:
+        curX = drawBtnPrompt("A", "Play / Resume", curX, curY);
+        curX = drawBtnPrompt("B", "Back", curX, curY);
+        curX = drawBtnPrompt("X", "Remove", curX, curY);
+        break;
+    case Screen::ADDONS:
+        curX = drawBtnPrompt("A", "Toggle / Install", curX, curY);
+        curX = drawBtnPrompt("B", "Back", curX, curY);
+        break;
+    case Screen::SETTINGS:
+        curX = drawBtnPrompt("A", "Select", curX, curY);
+        curX = drawBtnPrompt("B", "Back", curX, curY);
+        break;
+    default:
+        curX = drawBtnPrompt("A", "Select", curX, curY);
+        curX = drawBtnPrompt("B", "Back", curX, curY);
+        break;
+    }
+
+    // Author watermark on right
+    drawText("Author: Antigravity", SCREEN_W - 170, curY, {90, 100, 125, 255}, m_fontSmall);
 }
 
 // ─── Drawing helpers ─────────────────────────
@@ -2945,6 +3103,25 @@ void App::drawFilledRoundRect(int x, int y, int w, int h, int r, SDL_Color color
     drawCorner(x + w - r, y + h - r, r, r, 1, 1); // bottom-right
 }
 
+void App::maskRoundedCorners(int x, int y, int w, int h, int r, SDL_Color bgColor) {
+    if (r <= 0) return;
+    SDL_SetRenderDrawBlendMode(m_renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(m_renderer, bgColor.r, bgColor.g, bgColor.b, bgColor.a);
+    int rSq = r * r;
+    for (int j = 0; j < r; j++) {
+        for (int i = 0; i < r; i++) {
+            int di = r - 1 - i;
+            int dj = r - 1 - j;
+            if (di * di + dj * dj >= rSq) {
+                SDL_RenderDrawPoint(m_renderer, x + i, y + j);
+                SDL_RenderDrawPoint(m_renderer, x + w - 1 - i, y + j);
+                SDL_RenderDrawPoint(m_renderer, x + i, y + h - 1 - j);
+                SDL_RenderDrawPoint(m_renderer, x + w - 1 - i, y + h - 1 - j);
+            }
+        }
+    }
+}
+
 static void drawFilledCircle(SDL_Renderer* renderer, int cx, int cy, int radius, SDL_Color color) {
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
@@ -3013,7 +3190,10 @@ void App::drawSpinner(int cx, int cy, int radius) {
 
 void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
     if (item.poster.empty()) {
-        drawFilledRect(x, y, w, h, {40,40,55,255});
+        drawFilledRoundRect(x, y, w, h, 8, CARD_COLOR);
+        drawRoundRect(x, y, w, h, 8, {38, 46, 64, 180});
+        drawFilledRoundRect(x + w / 2 - 18, y + h / 2 - 18, 36, 36, 8, {32, 38, 54, 255});
+        drawTextCentered("🎬", x + w / 2, y + h / 2 - 10, TEXT_SECONDARY, m_fontSmall);
         return;
     }
 
@@ -3034,7 +3214,9 @@ void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
     }
 
     if (isFailed) {
-        drawFilledRect(x, y, w, h, {40,40,55,255});
+        drawFilledRoundRect(x, y, w, h, 8, CARD_COLOR);
+        drawRoundRect(x, y, w, h, 8, {38, 46, 64, 180});
+        drawTextCentered("No Poster", x + w / 2, y + h / 2 - 8, TEXT_SECONDARY, m_fontSmall);
         return;
     }
 
@@ -3054,8 +3236,10 @@ void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
         }
     }
 
-    // Draw loading/placeholder box
-    drawFilledRect(x, y, w, h, {30,30,45,255});
+    // Draw loading card with subtle spinner
+    drawFilledRoundRect(x, y, w, h, 8, CARD_COLOR);
+    drawRoundRect(x, y, w, h, 8, {38, 46, 64, 180});
+    drawSpinner(x + w / 2, y + h / 2, 16);
 }
 
 void App::downloadWorkerLoop() {
@@ -3795,7 +3979,7 @@ void App::handleLongPress(int x, int y) {
         }
         if (localCatalogs.empty() || m_loadingHome) return;
 
-        int startY = 70;
+        int startY = 74;
         int visibleRows = 2;
         int firstRow = m_homeRowIndex > 0 ? m_homeRowIndex - 1 : 0;
         int maxVisibleCols = (SCREEN_W - 80) / (POSTER_W + POSTER_GAP);
@@ -3803,7 +3987,7 @@ void App::handleLongPress(int x, int y) {
         for (int r = firstRow; r < (int)localCatalogs.size() && r < firstRow + visibleRows + 1; r++) {
             auto& row = localCatalogs[r];
             int rowY = startY + (r - firstRow) * ROW_HEIGHT;
-            int cardY = rowY + 30;
+            int cardY = rowY + 34;
 
             int startCol = 0;
             if (r == m_homeRowIndex && m_homeColIndex >= maxVisibleCols)
