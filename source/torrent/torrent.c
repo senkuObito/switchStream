@@ -42,7 +42,6 @@ static const char *DEFAULT_TRACKERS[] = {
     "udp://tracker.torrent.eu.org:451/announce",
     "udp://exodus.desync.com:6969/announce",
     "udp://open.demonii.com:1337/announce",
-    "udp://tracker.openbittorrent.com:6969/announce",
     "udp://explodie.org:6969/announce",
 };
 

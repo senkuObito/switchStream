@@ -351,6 +351,7 @@ void Player::play(const std::string& url, const std::string& headers) {
     m_cachedCacheSecs.store(0.0);
     m_cachedCacheIdle.store(false);
     m_cachedBuffering.store(false);
+    m_fileLoaded.store(false);
     m_finished = false;
 
     // For torrent streams, start paused so demuxer cache fills before unpausing
@@ -409,6 +410,7 @@ void Player::stop() {
 
     m_paused   = true;
     m_finished = false;
+    m_fileLoaded.store(false);
     m_cachedPos.store(0.0);
     m_cachedDuration.store(0.0);
     m_cachedCacheSecs.store(0.0);
@@ -524,6 +526,11 @@ void Player::update() {
                         m_paused = (flag != 0);
                     }
                 }
+                break;
+            }
+            case MPV_EVENT_FILE_LOADED: {
+                m_fileLoaded.store(true);
+                printf("[Player] MPV_EVENT_FILE_LOADED: media container demuxed successfully!\n");
                 break;
             }
             case MPV_EVENT_END_FILE: {

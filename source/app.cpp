@@ -2282,7 +2282,7 @@ void App::renderPlayer() {
         }
     }
 
-    bool showLoading = (pos <= 0.01) || m_torrentBuffering;
+    bool showLoading = isNativeTorrent ? m_torrentBuffering : (pos <= 0.01);
 
     if (showLoading) {
         // Keep the render context active to prevent libmpv warning/hang
@@ -2320,6 +2320,8 @@ void App::renderPlayer() {
             std::string statDesc;
             if (TorrentStream::instance().isOpening()) {
                 statDesc = stats.statusStr;
+            } else if (!m_player.isFileLoaded()) {
+                statDesc = "Reading media header & index...";
             } else {
                 double cacheSecs = m_player.getCacheDuration();
                 pct = (cacheSecs / 2.0) * 100.0;

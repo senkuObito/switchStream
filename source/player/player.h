@@ -72,6 +72,7 @@ public:
     bool isFinished() const;
     bool isBuffering() const;
     double getBufferingPercentage() const;
+    bool isFileLoaded() const { return m_fileLoaded.load(); }
 
     std::string getActiveHeaders() const { return m_activeHeaders; }
 
@@ -95,6 +96,7 @@ private:
     std::string m_activeHeaders;
 
     // Asynchronously observed properties (updated in update() via MPV_EVENT_PROPERTY_CHANGE)
+    std::atomic<bool> m_fileLoaded{false};
     std::atomic<double> m_cachedPos{0.0};
     std::atomic<double> m_cachedDuration{0.0};
     std::atomic<double> m_cachedCacheSecs{0.0};

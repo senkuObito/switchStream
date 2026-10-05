@@ -122,8 +122,7 @@ int magnet_parse(const char *uri, magnet_info *m, char *err, size_t errlen) {
             "udp://open.demonii.com:1337/announce",
             "udp://open.stealth.si:80/announce",
             "udp://tracker.torrent.eu.org:451/announce",
-            "udp://explodie.org:6969/announce",
-            "udp://tracker.openbittorrent.com:6969/announce"
+            "udp://explodie.org:6969/announce"
         };
         for (size_t i = 0; i < sizeof(DEFAULT_TRACKERS) / sizeof(DEFAULT_TRACKERS[0]); i++) {
             add_tracker(m, DEFAULT_TRACKERS[i]);
