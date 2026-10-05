@@ -83,6 +83,23 @@ bool AddonManager::loadConfig(const std::string& configPath) {
             if (a.HasMember("id") && a["id"].IsString()) {
                 addon.manifest.id = a["id"].GetString();
             }
+            if (a.HasMember("description") && a["description"].IsString()) {
+                addon.manifest.description = a["description"].GetString();
+            }
+            if (a.HasMember("version") && a["version"].IsString()) {
+                addon.manifest.version = a["version"].GetString();
+            }
+
+            // Fill empty fields from fallback resolver
+            if (addon.manifest.name.empty()) {
+                addon.manifest.name = getAddonFallbackName(url);
+            }
+            if (addon.manifest.description.empty()) {
+                addon.manifest.description = getAddonFallbackDesc(url);
+            }
+            if (addon.manifest.id.empty()) {
+                addon.manifest.id = getAddonFallbackId(url);
+            }
 
             if (url.find("opensubtitles") != std::string::npos) {
                 if (addon.manifest.id.empty()) addon.manifest.id = "org.stremio.opensubtitlesv3";
@@ -152,9 +169,18 @@ bool AddonManager::saveConfig(const std::string& configPath) const {
         writer.Key("enabled");
         writer.Bool(addon.enabled);
         writer.Key("id");
-        writer.String(addon.manifest.id.c_str());
+        std::string id = addon.manifest.id.empty() ? getAddonFallbackId(addon.transportUrl) : addon.manifest.id;
+        writer.String(id.c_str());
         writer.Key("name");
-        writer.String(addon.manifest.name.c_str());
+        std::string name = addon.manifest.name.empty() ? getAddonFallbackName(addon.transportUrl) : addon.manifest.name;
+        writer.String(name.c_str());
+        writer.Key("description");
+        std::string desc = addon.manifest.description.empty() ? getAddonFallbackDesc(addon.transportUrl) : addon.manifest.description;
+        writer.String(desc.c_str());
+        if (!addon.manifest.version.empty()) {
+            writer.Key("version");
+            writer.String(addon.manifest.version.c_str());
+        }
         writer.EndObject();
     }
     writer.EndArray();
@@ -229,8 +255,16 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
     addon.transportUrl = transportUrl;
     addon.enabled = true;
 
-    if (!m_client.fetchManifest(transportUrl, addon.manifest))
-        return false;
+    if (!m_client.fetchManifest(transportUrl, addon.manifest)) {
+        // Even if manifest fetch fails (e.g. offline/timeout), populate fallbacks
+        addon.manifest.name = getAddonFallbackName(transportUrl);
+        addon.manifest.description = getAddonFallbackDesc(transportUrl);
+        addon.manifest.id = getAddonFallbackId(transportUrl);
+    } else {
+        if (addon.manifest.name.empty()) addon.manifest.name = getAddonFallbackName(transportUrl);
+        if (addon.manifest.description.empty()) addon.manifest.description = getAddonFallbackDesc(transportUrl);
+        if (addon.manifest.id.empty()) addon.manifest.id = getAddonFallbackId(transportUrl);
+    }
 
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
@@ -251,12 +285,17 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
 
 void AddonManager::addAddon(const InstalledAddon& addon) {
     m_suppressStreamAddonWarning = false;
+    InstalledAddon a = addon;
+    if (a.manifest.name.empty()) a.manifest.name = getAddonFallbackName(a.transportUrl);
+    if (a.manifest.description.empty()) a.manifest.description = getAddonFallbackDesc(a.transportUrl);
+    if (a.manifest.id.empty()) a.manifest.id = getAddonFallbackId(a.transportUrl);
+
     std::lock_guard<std::mutex> lock(m_addonsMutex);
-    for (const auto& a : m_addons) {
-        if (a.transportUrl == addon.transportUrl) return;
-        if (!addon.manifest.id.empty() && a.manifest.id == addon.manifest.id) return;
+    for (const auto& existing : m_addons) {
+        if (existing.transportUrl == a.transportUrl) return;
+        if (!a.manifest.id.empty() && existing.manifest.id == a.manifest.id) return;
     }
-    m_addons.push_back(addon);
+    m_addons.push_back(std::move(a));
 }
 
 void AddonManager::removeAddon(const std::string& addonId) {
@@ -274,7 +313,7 @@ void AddonManager::toggleAddon(const std::string& addonId) {
     std::lock_guard<std::mutex> lock(m_addonsMutex);
     // Toggle ALL entries with this ID — handles any lingering duplicates
     for (auto& a : m_addons) {
-        if (a.manifest.id == addonId) {
+        if (a.manifest.id == addonId || a.transportUrl == addonId) {
             a.enabled = !a.enabled;
         }
     }
@@ -292,6 +331,9 @@ void AddonManager::ensureManifest(InstalledAddon& addon) {
             }
         }
     }
+    if (addon.manifest.name.empty()) addon.manifest.name = getAddonFallbackName(addon.transportUrl);
+    if (addon.manifest.description.empty()) addon.manifest.description = getAddonFallbackDesc(addon.transportUrl);
+    if (addon.manifest.id.empty()) addon.manifest.id = getAddonFallbackId(addon.transportUrl);
 }
 
 bool AddonManager::addonHandles(const InstalledAddon& addon,
@@ -559,6 +601,148 @@ std::vector<Subtitle> AddonManager::getAllSubtitles(const std::string& type,
         }
     }
     return allSubs;
+}
+
+std::string AddonManager::getAddonFallbackName(const std::string& url) {
+    std::string low = url;
+    for (char& c : low) c = (char)tolower((unsigned char)c);
+
+    if (low.find("cinemeta") != std::string::npos) return "Cinemeta";
+    if (low.find("yastream") != std::string::npos) return "yastream";
+    if (low.find("kdramacrush") != std::string::npos || low.find("k-drama") != std::string::npos) return "K-Drama Crush";
+    if (low.find("cyberflix") != std::string::npos) return "CyberFlix Catalogs";
+    if (low.find("torrentio") != std::string::npos) return "Torrentio";
+    if (low.find("filtorrent") != std::string::npos) return "Filtorrent";
+    if (low.find("dramayo") != std::string::npos) return "Dramayo";
+    if (low.find("inmax") != std::string::npos) return "InMax";
+    if (low.find("indtorrents") != std::string::npos) return "IndTorrents";
+    if (low.find("thepiratebay") != std::string::npos) return "ThePirateBay+";
+    if (low.find("torrentsdb") != std::string::npos) return "TorrentsDB";
+    if (low.find("streamvix") != std::string::npos) return "StreamViX | ElfHosted";
+    if (low.find("nodebrid") != std::string::npos) return "NoDebrid";
+    if (low.find("streamasia") != std::string::npos || low.find("dramacool") != std::string::npos) return "StreamAsia";
+    if (low.find("animestream") != std::string::npos) return "AnimeStream";
+    if (low.find("free.flixnest") != std::string::npos) return "Flix-Streams Free";
+    if (low.find("flixnest") != std::string::npos) return "Flix Streams";
+    if (low.find("nebulastreams") != std::string::npos) return "Nebula Streams";
+    if (low.find("moviebox") != std::string::npos) return "MovieBox";
+    if (low.find("sword-watch") != std::string::npos) return "Sword Watch";
+    if (low.find("morpheus") != std::string::npos) return "Morpheus Streams";
+    if (low.find("yukistreams") != std::string::npos) return "Yukistreams";
+    if (low.find("nagare") != std::string::npos) return "Nexio Nagare";
+    if (low.find("opensubtitles") != std::string::npos) return "OpenSubtitles v3";
+    if (low.find("watchhub") != std::string::npos) return "WatchHub";
+    if (low.find("indiastreams") != std::string::npos) return "IndiaStreams";
+    if (low.find("indian-streams") != std::string::npos) return "Indian Regional Catalog";
+    if (low.find("tmdb-collections") != std::string::npos) return "TMDB Collections";
+    if (low.find("streaming-catalogs") != std::string::npos) return "Streaming Catalogs";
+    if (low.find("comet") != std::string::npos) return "Comet | ElfHosted";
+    if (low.find("knightcrawler") != std::string::npos) return "KnightCrawler";
+    if (low.find("debrid-search") != std::string::npos) return "Debrid Search";
+    if (low.find("youtube") != std::string::npos) return "YouTube";
+    if (low.find("twitch") != std::string::npos) return "TwitchStream";
+
+    // Extract domain from URL
+    std::string clean = url;
+    size_t proto = clean.find("://");
+    if (proto != std::string::npos) clean = clean.substr(proto + 3);
+    size_t slash = clean.find('/');
+    if (slash != std::string::npos) clean = clean.substr(0, slash);
+    if (!clean.empty()) return clean;
+    return "Custom Addon";
+}
+
+std::string AddonManager::getAddonFallbackDesc(const std::string& url) {
+    std::string low = url;
+    for (char& c : low) c = (char)tolower((unsigned char)c);
+
+    if (low.find("cinemeta") != std::string::npos) return "The official addon for movie and series catalogs & search.";
+    if (low.find("yastream") != std::string::npos) return "Stream Asian dramas, series and movies directly with multiple providers.";
+    if (low.find("kdramacrush") != std::string::npos || low.find("k-drama") != std::string::npos) return "Asian and Korean drama catalog (drama feeds).";
+    if (low.find("cyberflix") != std::string::npos) return "Movie and series catalogs sorted by streaming provider.";
+    if (low.find("torrentio") != std::string::npos) return "Torrent streams from YTS, RARBG, 1337x, etc.";
+    if (low.find("filtorrent") != std::string::npos) return "Curated & shaped Torrentio + TorrentsDB streams with resolution filtering.";
+    if (low.find("dramayo") != std::string::npos) return "Asian dramas, series and movies catalog & streams.";
+    if (low.find("inmax") != std::string::npos) return "Indian and regional movies & series streams from TamilMV / TamilBlasters.";
+    if (low.find("indtorrents") != std::string::npos) return "Indian torrent streams for regional movies and series.";
+    if (low.find("thepiratebay") != std::string::npos) return "ThePirateBay+ torrent streams provider.";
+    if (low.find("torrentsdb") != std::string::npos) return "TorrentsDB multi-tracker torrent stream search.";
+    if (low.find("streamvix") != std::string::npos) return "StreamViX multi-source HTTP streams provider.";
+    if (low.find("nodebrid") != std::string::npos) return "Direct HTTP/HLS streams without requiring Debrid subscriptions.";
+    if (low.find("streamasia") != std::string::npos || low.find("dramacool") != std::string::npos) return "Asian drama, movie and series streams from Dramacool.";
+    if (low.find("animestream") != std::string::npos) return "Anime streaming catalog and metadata provider.";
+    if (low.find("free.flixnest") != std::string::npos) return "Free HTTP streaming links from public providers.";
+    if (low.find("flixnest") != std::string::npos) return "HTTP streams from multiple sources.";
+    if (low.find("nebulastreams") != std::string::npos) return "HTTP streams from multiple sources.";
+    if (low.find("moviebox") != std::string::npos) return "HTTP streams for movies and series.";
+    if (low.find("sword-watch") != std::string::npos) return "HTTP streams provider.";
+    if (low.find("morpheus") != std::string::npos) return "Multi-source streaming addon.";
+    if (low.find("yukistreams") != std::string::npos) return "Anime and Asian drama streams provider.";
+    if (low.find("nagare") != std::string::npos) return "Anime streaming provider.";
+    if (low.find("opensubtitles") != std::string::npos) return "Subtitles in 50+ languages.";
+    if (low.find("watchhub") != std::string::npos) return "Official streaming links (Netflix, Prime, etc.).";
+    if (low.find("indiastreams") != std::string::npos) return "Trending movies and shows from Indian platforms.";
+    if (low.find("indian-streams") != std::string::npos) return "Indian regional movies catalog by language.";
+    if (low.find("tmdb-collections") != std::string::npos) return "Movie collections grouped by franchise.";
+    if (low.find("streaming-catalogs") != std::string::npos) return "Catalogs from Netflix, Disney+, HBO, Prime, etc.";
+    if (low.find("comet") != std::string::npos) return "Fast torrent/debrid stream search.";
+    if (low.find("knightcrawler") != std::string::npos) return "Alternative torrent and debrid stream search.";
+    if (low.find("debrid-search") != std::string::npos) return "Search and stream files directly from your Debrid torrent cloud cache.";
+    if (low.find("youtube") != std::string::npos) return "Watch YouTube content directly.";
+    if (low.find("twitch") != std::string::npos) return "Watch live gaming and creative streams.";
+    return "Custom Stremio-compatible media addon.";
+}
+
+std::string AddonManager::getAddonFallbackId(const std::string& url) {
+    std::string low = url;
+    for (char& c : low) c = (char)tolower((unsigned char)c);
+
+    if (low.find("cinemeta") != std::string::npos) return "com.linvo.cinemeta";
+    if (low.find("yastream") != std::string::npos) return "community.yastream";
+    if (low.find("kdramacrush") != std::string::npos || low.find("k-drama") != std::string::npos) return "org.stremio.kdramas";
+    if (low.find("cyberflix") != std::string::npos) return "com.cyberflix.addon";
+    if (low.find("torrentio") != std::string::npos) return "com.stremio.torrentio.addon";
+    if (low.find("filtorrent") != std::string::npos) return "community.filtorrent";
+    if (low.find("dramayo") != std::string::npos) return "community.dramayo";
+    if (low.find("inmax") != std::string::npos) return "in.max.stream";
+    if (low.find("indtorrents") != std::string::npos) return "com.stremio.indtorrents";
+    if (low.find("thepiratebay") != std::string::npos) return "thepiratebay-plus";
+    if (low.find("torrentsdb") != std::string::npos) return "org.stremio.torrentsdb";
+    if (low.find("streamvix") != std::string::npos) return "streamvix.hayd.uk";
+    if (low.find("nodebrid") != std::string::npos) return "nodebrid.fly.dev";
+    if (low.find("streamasia") != std::string::npos || low.find("dramacool") != std::string::npos) return "org.stremio.streamasia";
+    if (low.find("animestream") != std::string::npos) return "org.stremio.animestream";
+    if (low.find("opensubtitles") != std::string::npos) return "org.stremio.opensubtitlesv3";
+    if (low.find("morpheus") != std::string::npos) return "community.morpheus";
+    if (low.find("sword-watch") != std::string::npos) return "community.swordwatch";
+    if (low.find("yukistreams") != std::string::npos) return "yukistreams.stremio.public";
+    if (low.find("nagare") != std::string::npos) return "org.community.nexionagare";
+
+    std::string clean = url;
+    size_t proto = clean.find("://");
+    if (proto != std::string::npos) clean = clean.substr(proto + 3);
+    for (char& c : clean) {
+        if (!isalnum((unsigned char)c) && c != '.') c = '_';
+    }
+    return clean;
+}
+
+std::string AddonManager::getAddonCategoryBadge(const InstalledAddon& addon) {
+    for (const auto& r : addon.manifest.resources) {
+        if (r.name == "stream") return "[Stream]";
+    }
+    for (const auto& r : addon.manifest.resources) {
+        if (r.name == "subtitles") return "[Subtitles]";
+    }
+    if (!addon.manifest.catalogs.empty()) return "[Catalog]";
+
+    // Fallback based on URL or ID
+    std::string low = addon.transportUrl + " " + addon.manifest.id + " " + addon.manifest.name;
+    for (char& c : low) c = (char)tolower((unsigned char)c);
+    if (low.find("opensubtitles") != std::string::npos || low.find("subtitle") != std::string::npos) return "[Subtitles]";
+    if (low.find("torrent") != std::string::npos || low.find("stream") != std::string::npos || low.find("debrid") != std::string::npos) return "[Stream]";
+    if (low.find("catalog") != std::string::npos || low.find("meta") != std::string::npos || low.find("movie") != std::string::npos || low.find("series") != std::string::npos) return "[Catalog]";
+    return "[Addon]";
 }
 
 } // namespace ss

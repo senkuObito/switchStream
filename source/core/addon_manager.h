@@ -90,6 +90,12 @@ public:
     // Count enabled stream-providing addons (excluding catalog-only or subtitle-only addons)
     int getEnabledStreamAddonCount() const;
 
+    // Fallback resolvers to ensure no addon ever has empty display fields
+    static std::string getAddonFallbackName(const std::string& url);
+    static std::string getAddonFallbackDesc(const std::string& url);
+    static std::string getAddonFallbackId(const std::string& url);
+    static std::string getAddonCategoryBadge(const InstalledAddon& addon);
+
 private:
     // Ensure manifest is fetched on the fly if it failed at startup
     void ensureManifest(InstalledAddon& addon);

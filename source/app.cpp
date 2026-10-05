@@ -251,6 +251,19 @@ bool App::init() {
         }
 
         auto currentAddons = m_addonManager.getAddons();
+        for (const auto& a : currentAddons) {
+            if (a.manifest.name.empty() || a.manifest.description.empty() || a.manifest.id.empty()) {
+                InstalledAddon fixed = a;
+                if (fixed.manifest.name.empty()) fixed.manifest.name = AddonManager::getAddonFallbackName(fixed.transportUrl);
+                if (fixed.manifest.description.empty()) fixed.manifest.description = AddonManager::getAddonFallbackDesc(fixed.transportUrl);
+                if (fixed.manifest.id.empty()) fixed.manifest.id = AddonManager::getAddonFallbackId(fixed.transportUrl);
+                m_addonManager.removeAddon(a.transportUrl);
+                m_addonManager.addAddon(fixed);
+                updatedAddons = true;
+            }
+        }
+
+        currentAddons = m_addonManager.getAddons();
         for (const auto& url : defaultAddons) {
             bool found = false;
             for (const auto& a : currentAddons) {
@@ -264,6 +277,9 @@ bool App::init() {
                 InstalledAddon a;
                 a.transportUrl = url;
                 a.enabled = true;
+                a.manifest.name = AddonManager::getAddonFallbackName(url);
+                a.manifest.description = AddonManager::getAddonFallbackDesc(url);
+                a.manifest.id = AddonManager::getAddonFallbackId(url);
                 m_addonManager.addAddon(a);
                 updatedAddons = true;
             }
@@ -3819,14 +3835,18 @@ void App::renderAddons() {
                 drawRect(leftX + 5, itemY - 2, leftW - 10, 56, {255, 255, 255, 45});
             }
             
-            std::string displayName = addons[i].manifest.name;
-            if (!addons[i].enabled) {
-                displayName = "[Disabled] " + displayName;
-            }
+            std::string name = addons[i].manifest.name;
+            if (name.empty()) name = AddonManager::getAddonFallbackName(addons[i].transportUrl);
+
+            std::string badge = AddonManager::getAddonCategoryBadge(addons[i]);
+            std::string statusTag = addons[i].enabled ? " [Active]" : " [Disabled]";
+            std::string displayName = name + "  " + badge + statusTag;
+
             SDL_Color textColor = sel ? ACCENT : (addons[i].enabled ? TEXT_PRIMARY : TEXT_SECONDARY);
             drawText(displayName, leftX + 15, itemY + 4, textColor, m_fontNormal);
             
             std::string desc = addons[i].manifest.description;
+            if (desc.empty()) desc = AddonManager::getAddonFallbackDesc(addons[i].transportUrl);
             if (desc.size() > 65) desc = desc.substr(0, 62) + "...";
             drawText(desc, leftX + 15, itemY + 26, TEXT_SECONDARY, m_fontSmall);
             
@@ -3867,10 +3887,19 @@ void App::renderAddons() {
             drawRect(rightX + 5, itemY - 2, rightW - 10, 56, {255, 255, 255, 45});
         }
 
-        drawText(DISCOVER_ADDONS[i].name, rightX + 15, itemY + 4, sel ? ACCENT : (installed ? SDL_Color{100, 200, 100, 255} : TEXT_PRIMARY), m_fontNormal);
+        std::string dUrl = DISCOVER_ADDONS[i].url;
+        std::string badge = "";
+        if (dUrl.find("opensubtitles") != std::string::npos) badge = "[Subtitles]";
+        else if (dUrl.find("torrent") != std::string::npos || dUrl.find("stream") != std::string::npos || dUrl.find("debrid") != std::string::npos) badge = "[Stream]";
+        else badge = "[Catalog]";
+
+        std::string displayTitle = DISCOVER_ADDONS[i].name + "  " + badge;
+        if (installed) displayTitle += " [Installed]";
+
+        drawText(displayTitle, rightX + 15, itemY + 4, sel ? ACCENT : (installed ? SDL_Color{100, 220, 140, 255} : TEXT_PRIMARY), m_fontNormal);
         
         std::string desc = DISCOVER_ADDONS[i].description;
-        if (installed) desc = "[Installed] " + desc;
+        if (desc.empty()) desc = AddonManager::getAddonFallbackDesc(dUrl);
         if (desc.size() > 65) desc = desc.substr(0, 62) + "...";
         drawText(desc, rightX + 15, itemY + 26, TEXT_SECONDARY, m_fontSmall);
 
@@ -4274,11 +4303,14 @@ void App::drawSpinner(int cx, int cy, int radius) {
 }
 
 void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
-    if (item.poster.empty() && item.name.empty()) {
+    if (item.poster.empty()) {
         drawFilledRoundRect(x, y, w, h, 8, CARD_COLOR);
         drawRoundRect(x, y, w, h, 8, {38, 46, 64, 180});
-        drawFilledRoundRect(x + w / 2 - 18, y + h / 2 - 18, 36, 36, 8, {32, 38, 54, 255});
-        drawTextCentered("🎬", x + w / 2, y + h / 2 - 10, TEXT_SECONDARY, m_fontSmall);
+        drawFilledRoundRect(x + w / 2 - 20, y + h / 2 - 24, 40, 40, 8, {32, 40, 58, 255});
+        drawTextCentered("🎬", x + w / 2, y + h / 2 - 14, TEXT_SECONDARY, m_fontNormal);
+        std::string sub = item.name;
+        if (sub.size() > 14) sub = sub.substr(0, 12) + "..";
+        drawTextCentered(sub, x + w / 2, y + h / 2 + 20, TEXT_SECONDARY, m_fontSmall);
         return;
     }
 
@@ -4316,7 +4348,9 @@ void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
     if (isFailed) {
         drawFilledRoundRect(x, y, w, h, 8, CARD_COLOR);
         drawRoundRect(x, y, w, h, 8, {38, 46, 64, 180});
-        drawTextCentered("No Poster", x + w / 2, y + h / 2 - 8, TEXT_SECONDARY, m_fontSmall);
+        drawFilledRoundRect(x + w / 2 - 20, y + h / 2 - 24, 40, 40, 8, {32, 40, 58, 255});
+        drawTextCentered("🎬", x + w / 2, y + h / 2 - 14, TEXT_SECONDARY, m_fontNormal);
+        drawTextCentered("No Poster", x + w / 2, y + h / 2 + 20, TEXT_SECONDARY, m_fontSmall);
         return;
     }
 
