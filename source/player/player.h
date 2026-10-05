@@ -41,6 +41,10 @@ public:
     void seek(double offsetSeconds);
     void seekAbsolute(double positionSeconds);
 
+    // Playback Speed (e.g. 2.0x fast-forward)
+    void setSpeed(double speed);
+    double getSpeed() const;
+
     // Audio & Subtitle & Volume Controls
     void changeVolume(double delta);
     void cycleSubtitles();

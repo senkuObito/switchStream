@@ -122,7 +122,7 @@
 // are dropped; a read that lands on a dropped piece re-downloads it (the read
 // moves the playhead there, so the streaming window covers it). Sized to leave
 // the forward window plenty of seek-back slack; needs a full-RAM launch.
-#define RAM_STREAM_BUDGET (256LL << 20)
+#define RAM_STREAM_BUDGET (160LL << 20)
 
 #define TFS_MAX_PEERS    128
 #define BACKOFF_CONN_SECS 15

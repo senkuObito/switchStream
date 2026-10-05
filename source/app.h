@@ -86,7 +86,7 @@ private:
     ImageCache* m_imageCache = nullptr;
     Player m_player;
 
-    void handleInputForPad(u64 kDown);
+    void handleInputForPad(u64 kDown, u64 kHeld = 0, u64 kUp = 0);
     void handleTouch(int x, int y);
     void handleDrag(int dx, int dy);
     void handleLongPress(int x, int y);
@@ -183,6 +183,11 @@ private:
     bool m_isScrubbing = false;
     double m_scrubStartPos = 0.0;
     double m_scrubCurrentPos = 0.0;
+
+    // 2X Speed & Joycon long-press handling
+    bool m_is2xSpeed = false;
+    uint32_t m_rButtonDownTime = 0;
+    bool m_rButtonLongPressed = false;
 
     // Subtitle & Audio track overlay lists state
     bool m_showSubList = false;

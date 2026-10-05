@@ -374,6 +374,9 @@ void App::run() {
         // If playing and finished (EOF reached after actual playback), go back to detail screen
         if (m_screen == Screen::PLAYER && m_player.isFinished() && !TorrentStream::instance().isOpening() && !m_torrentBuffering) {
             printf("[App] Playback reached EOF, returning to detail screen\n");
+            m_is2xSpeed = false;
+            m_rButtonDownTime = 0;
+            m_rButtonLongPressed = false;
             m_player.stop();
             m_screen = Screen::DETAIL;
         }
@@ -382,6 +385,8 @@ void App::run() {
         if (!appletMainLoop()) break;
         padUpdate(&pad);
         u64 kDown = padGetButtonsDown(&pad);
+        u64 kHeld = padGetButtons(&pad);
+        u64 kUp   = padGetButtonsUp(&pad);
 
         // Global: + button to exit
         if (kDown & HidNpadButton_Plus) {
@@ -458,7 +463,7 @@ void App::run() {
             wasTouched = false;
         }
 
-        handleInputForPad(kDown);
+        handleInputForPad(kDown, kHeld, kUp);
 #else
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -558,7 +563,17 @@ void App::run() {
                         break;
                 }
                 if (key != 0) {
-                    handleInputForPad(key);
+                    handleInputForPad(key, key, 0);
+                }
+            }
+            else if (event.type == SDL_CONTROLLERBUTTONUP) {
+                u64 key = 0;
+                switch (event.cbutton.button) {
+                    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:key |= HidNpadButton_R; break;
+                    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: key |= HidNpadButton_L; break;
+                }
+                if (key != 0) {
+                    handleInputForPad(0, 0, key);
                 }
             }
             // Handle keyboard keys
@@ -583,10 +598,26 @@ void App::run() {
                     case SDLK_b:
                     case SDLK_x:        key |= HidNpadButton_X; break;
                     case SDLK_l:        key |= HidNpadButton_L; break;
+                    case SDLK_r:
                     case SDLK_a:        key |= HidNpadButton_R; break;
                 }
                 if (key != 0) {
-                    handleInputForPad(key);
+                    if (event.key.repeat == 0) {
+                        handleInputForPad(key, key, 0);
+                    } else {
+                        handleInputForPad(0, key, 0);
+                    }
+                }
+            }
+            else if (event.type == SDL_KEYUP) {
+                u64 key = 0;
+                switch (event.key.keysym.sym) {
+                    case SDLK_r:
+                    case SDLK_a:        key |= HidNpadButton_R; break;
+                    case SDLK_l:        key |= HidNpadButton_L; break;
+                }
+                if (key != 0) {
+                    handleInputForPad(0, 0, key);
                 }
             }
         }
@@ -608,7 +639,7 @@ void App::run() {
     }
 }
 
-void App::handleInputForPad(u64 kDown) {
+void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
     switch (m_screen) {
     case Screen::HOME: {
         if (m_showStreamWarningPopup) {
@@ -1004,8 +1035,9 @@ void App::handleInputForPad(u64 kDown) {
     case Screen::PLAYER: {
         uint32_t now = SDL_GetTicks();
 
-        if (kDown) {
-            if (m_showSubList) {
+        // 1. Modal overlay menus (Subtitles, Audio tracks, Quality selection)
+        if (m_showSubList) {
+            if (kDown) {
                 m_osdShowTime = now;
                 if (m_subAddonMode) {
                     if (m_subAddonLoading.load()) {
@@ -1037,7 +1069,6 @@ void App::handleInputForPad(u64 kDown) {
                             }
                         }
                     }
-                    break;
                 } else {
                     auto tracks = m_player.getSubtitleTracks();
                     int totalItems = 1 + (int)tracks.size();
@@ -1061,10 +1092,13 @@ void App::handleInputForPad(u64 kDown) {
                     else if (kDown & HidNpadButton_B) {
                         m_showSubList = false;
                     }
-                    break;
                 }
             }
-            if (m_showAudioList) {
+            break;
+        }
+
+        if (m_showAudioList) {
+            if (kDown) {
                 m_osdShowTime = now;
                 auto tracks = m_player.getAudioTracks();
                 if (kDown & HidNpadButton_Up) {
@@ -1082,9 +1116,12 @@ void App::handleInputForPad(u64 kDown) {
                 else if (kDown & HidNpadButton_B) {
                     m_showAudioList = false;
                 }
-                break;
             }
-            if (m_showQualityList) {
+            break;
+        }
+
+        if (m_showQualityList) {
+            if (kDown) {
                 m_osdShowTime = now;
                 std::vector<Stream> localStreams;
                 {
@@ -1106,48 +1143,22 @@ void App::handleInputForPad(u64 kDown) {
                 else if (kDown & HidNpadButton_B) {
                     m_showQualityList = false;
                 }
-                break;
             }
+            break;
+        }
 
-            bool isPlayerErr = m_torrentFailed || m_player.hasError() ||
-                               (TorrentStream::instance().isActive() == false && !TorrentStream::instance().isOpening() && !m_lastPlayingMagnet.empty());
-            if (isPlayerErr) {
-                if (kDown & (HidNpadButton_B | HidNpadButton_A | HidNpadButton_Plus | HidNpadButton_X | HidNpadButton_Y)) {
-                    printf("[App] Returning to DETAIL from player error state\n");
-                    m_torrentBuffering = false;
-                    m_torrentFailed = false;
-                    m_lastPlayingMagnet.clear();
-                    {
-                        std::lock_guard<std::mutex> lock(m_torrentMutex);
-                        m_torrentPollingActive = false;
-                        m_pendingTorrentPlay = false;
-                    }
-                    if (m_torrentPollingThread.joinable()) {
-                        m_torrentPollingThread.join();
-                    }
-                    m_player.stop();
-                    m_screen = Screen::DETAIL;
-                    break;
-                }
-            }
-
-            if (kDown & HidNpadButton_B) {
-                // If a popup overlay menu is open, B closes that menu
-                if (m_showSubList || m_showAudioList || m_showQualityList) {
-                    if (m_showSubList && m_subAddonMode) {
-                        cancelAddonSubtitle();
-                    } else {
-                        m_showSubList = false;
-                    }
-                    m_subAddonMode = false;
-                    m_showAudioList = false;
-                    m_showQualityList = false;
-                    m_osdShowTime = now;
-                    break;
-                }
-                // Otherwise B exits the player immediately back to DETAIL
-                printf("[App] B button pressed: stopping playback and returning to DETAIL\n");
+        // 2. Error handling state exit
+        bool isPlayerErr = m_torrentFailed || m_player.hasError() ||
+                           (TorrentStream::instance().isActive() == false && !TorrentStream::instance().isOpening() && !m_lastPlayingMagnet.empty());
+        if (isPlayerErr) {
+            if (kDown & (HidNpadButton_B | HidNpadButton_A | HidNpadButton_Plus | HidNpadButton_X | HidNpadButton_Y)) {
+                printf("[App] Returning to DETAIL from player error state\n");
+                m_is2xSpeed = false;
+                m_rButtonDownTime = 0;
+                m_rButtonLongPressed = false;
+                m_player.setSpeed(1.0);
                 m_torrentBuffering = false;
+                m_torrentFailed = false;
                 m_lastPlayingMagnet.clear();
                 {
                     std::lock_guard<std::mutex> lock(m_torrentMutex);
@@ -1161,51 +1172,124 @@ void App::handleInputForPad(u64 kDown) {
                 m_screen = Screen::DETAIL;
                 break;
             }
-
-            m_osdShowTime = now;
-            if (kDown & HidNpadButton_A) {
-                m_player.togglePlay();
-            }
-            else if (kDown & HidNpadButton_Right) {
-                m_player.seek(10.0);
-            }
-            else if (kDown & HidNpadButton_Left) {
-                m_player.seek(-10.0);
-            }
-            else if (kDown & HidNpadButton_Up) {
-                m_player.changeVolume(5.0);
-            }
-            else if (kDown & HidNpadButton_Down) {
-                m_player.changeVolume(-5.0);
-            }
-                else if (kDown & HidNpadButton_Y) {
-                    m_showSubList = true;
-                    m_subListIndex = 0;
-                    auto tracks = m_player.getSubtitleTracks();
-                    for (int i = 0; i < (int)tracks.size(); i++) {
-                        if (tracks[i].selected) {
-                            m_subListIndex = i;
-                            break;
-                        }
-                    }
-                }
-                else if (kDown & HidNpadButton_X) {
-                    m_showAudioList = true;
-                    m_audioListIndex = 0;
-                    auto tracks = m_player.getAudioTracks();
-                    for (int i = 0; i < (int)tracks.size(); i++) {
-                        if (tracks[i].selected) {
-                            m_audioListIndex = i;
-                            break;
-                        }
-                    }
-                }
-                else if (kDown & HidNpadButton_L) {
-                    // L button opens quality/stream switcher
-                    m_showQualityList = true;
-                    m_qualityListIndex = m_detailStreamIndex;
-                }
         }
+
+        // 3. Back button (B): return to DETAIL immediately
+        if (kDown & HidNpadButton_B) {
+            printf("[App] B button pressed: stopping playback and returning to DETAIL\n");
+            m_is2xSpeed = false;
+            m_rButtonDownTime = 0;
+            m_rButtonLongPressed = false;
+            m_player.setSpeed(1.0);
+            m_torrentBuffering = false;
+            m_lastPlayingMagnet.clear();
+            {
+                std::lock_guard<std::mutex> lock(m_torrentMutex);
+                m_torrentPollingActive = false;
+                m_pendingTorrentPlay = false;
+            }
+            if (m_torrentPollingThread.joinable()) {
+                m_torrentPollingThread.join();
+            }
+            m_player.stop();
+            m_screen = Screen::DETAIL;
+            break;
+        }
+
+        // 4. Long Press R / ZR for 2X Speed & Short Click for +5s Skip (NO player OSD)
+        if (kDown & (HidNpadButton_R | HidNpadButton_ZR)) {
+            m_rButtonDownTime = now;
+            m_rButtonLongPressed = false;
+        }
+
+        if (kHeld & (HidNpadButton_R | HidNpadButton_ZR)) {
+            if (m_rButtonDownTime > 0 && !m_rButtonLongPressed && (now - m_rButtonDownTime >= 300)) {
+                m_rButtonLongPressed = true;
+                m_is2xSpeed = true;
+                m_player.setSpeed(2.0);
+                printf("[Player] 2X Speed engaged (held >= 300ms)\n");
+            }
+        }
+
+        if (kUp & (HidNpadButton_R | HidNpadButton_ZR)) {
+            if (m_is2xSpeed || m_rButtonLongPressed) {
+                m_is2xSpeed = false;
+                m_rButtonLongPressed = false;
+                m_player.setSpeed(1.0);
+                printf("[Player] 2X Speed disengaged -> restored 1.0X\n");
+            } else if (m_rButtonDownTime > 0 && (now - m_rButtonDownTime < 300)) {
+                // Short click: skip 5s forward (no OSD)
+                m_player.seek(5.0);
+                printf("[Player] R clicked -> seek +5s (no OSD)\n");
+            }
+            m_rButtonDownTime = 0;
+        }
+
+        // 5. L button: skip 5s to prev (no OSD)
+        if (kDown & HidNpadButton_L) {
+            m_player.seek(-5.0);
+            printf("[Player] L clicked -> seek -5s (no OSD)\n");
+        }
+
+        // 6. D-Pad Left: skip 5s to prev (no OSD)
+        if (kDown & HidNpadButton_Left) {
+            m_player.seek(-5.0);
+            printf("[Player] Left clicked -> seek -5s (no OSD)\n");
+        }
+
+        // 7. D-Pad Right: skip 5s to right (no OSD)
+        if (kDown & HidNpadButton_Right) {
+            m_player.seek(5.0);
+            printf("[Player] Right clicked -> seek +5s (no OSD)\n");
+        }
+
+        // 8. A button: toggle play/pause (no OSD)
+        if (kDown & HidNpadButton_A) {
+            m_player.togglePlay();
+            printf("[Player] A clicked -> toggle play/pause (no OSD)\n");
+        }
+
+        // 9. ZL button: Quality / Stream switcher (opens overlay)
+        if (kDown & HidNpadButton_ZL) {
+            m_showQualityList = true;
+            m_qualityListIndex = m_detailStreamIndex;
+            m_osdShowTime = now;
+        }
+
+        // 10. Volume controls
+        if (kDown & HidNpadButton_Up) {
+            m_player.changeVolume(5.0);
+        }
+        else if (kDown & HidNpadButton_Down) {
+            m_player.changeVolume(-5.0);
+        }
+
+        // 11. Overlays (Y for Subtitles, X for Audio tracks)
+        if (kDown & HidNpadButton_Y) {
+            m_showSubList = true;
+            m_subListIndex = 0;
+            auto tracks = m_player.getSubtitleTracks();
+            for (int i = 0; i < (int)tracks.size(); i++) {
+                if (tracks[i].selected) {
+                    m_subListIndex = i;
+                    break;
+                }
+            }
+            m_osdShowTime = now;
+        }
+        else if (kDown & HidNpadButton_X) {
+            m_showAudioList = true;
+            m_audioListIndex = 0;
+            auto tracks = m_player.getAudioTracks();
+            for (int i = 0; i < (int)tracks.size(); i++) {
+                if (tracks[i].selected) {
+                    m_audioListIndex = i;
+                    break;
+                }
+            }
+            m_osdShowTime = now;
+        }
+
         break;
     }
 
@@ -3041,7 +3125,7 @@ void App::renderPlayer() {
             drawTextCentered("QUAL", qualX + btnQualW / 2, ctrlY + 5, qualColor, m_fontSmall);
 
             // Controller hints (centered with extra padding)
-            drawTextCentered("[A] Play/Pause   [Left/Right] Seek   [Y] Subs   [X] Audio   [L] Quality   [B] Back",
+            drawTextCentered("[A] Play/Pause   [L/R] -/+5s Seek   [Hold R] 2X Speed   [Y] Subs   [X] Audio   [ZL] Quality   [B] Back",
                              SCREEN_W / 2, panelY + panelH - 26, {120, 120, 140, 180}, m_fontSmall);
         }
 
@@ -3254,6 +3338,18 @@ void App::renderPlayer() {
             double pct = m_player.getBufferingPercentage();
             std::string bufText = "Buffering... " + std::to_string((int)pct) + "%";
             drawText(bufText, SCREEN_W / 2 - 65, cardY + 55, TEXT_PRIMARY, m_fontSmall);
+        }
+
+        // 5. 2X Speed Indicator (top-right badge shown while fast-forwarding at 2X)
+        if (m_is2xSpeed) {
+            int badgeW = 110;
+            int badgeH = 36;
+            int badgeX = SCREEN_W - badgeW - 25;
+            int badgeY = 20;
+
+            drawFilledRoundRect(badgeX, badgeY, badgeW, badgeH, 8, {15, 20, 30, 220});
+            drawRoundRect(badgeX, badgeY, badgeW, badgeH, 8, ACCENT);
+            drawTextCentered("2X  ▶▶", badgeX + badgeW / 2, badgeY + 6, ACCENT, m_fontNormal);
         }
 
         SDL_RenderPresent(m_renderer);

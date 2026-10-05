@@ -96,9 +96,16 @@ bool Player::init(SDL_Window* window, SDL_Renderer* renderer, bool hwDecode) {
     // Buffering & cache settings for smooth streaming
     mpv_set_option_string(m_mpv, "cache", "yes");
     mpv_set_option_string(m_mpv, "cache-pause", "no");
-    mpv_set_option_string(m_mpv, "demuxer-max-bytes", "128MiB");
-    mpv_set_option_string(m_mpv, "demuxer-readahead-secs", "30");
-    mpv_set_option_string(m_mpv, "cache-secs", "60");
+    mpv_set_option_string(m_mpv, "demuxer-max-bytes", "64MiB");
+    mpv_set_option_string(m_mpv, "demuxer-readahead-secs", "60");
+    mpv_set_option_string(m_mpv, "cache-secs", "120");
+
+    // Audio Downmixing Configuration:
+    // Downmix 5.1 and 7.1 surround sound to stereo so center channel (voice/dialogue)
+    // is properly mixed into Nintendo Switch stereo speakers/headphones!
+    mpv_set_option_string(m_mpv, "audio-channels", "stereo");
+    mpv_set_option_string(m_mpv, "audio-normalize-downmix", "yes");
+    mpv_set_option_string(m_mpv, "audio-pitch-correction", "yes");
 #ifdef __SWITCH__
     mpv_set_option_string(m_mpv, "opengl-glfinish", "yes");
     mpv_set_option_string(m_mpv, "vd-lavc-dr", "yes");
@@ -363,6 +370,9 @@ void Player::play(const std::string& url, const std::string& headers) {
     m_paused = isTorrent;
     m_cachedPaused.store(isTorrent);
 
+    double defaultSpeed = 1.0;
+    mpv_set_property(m_mpv, "speed", MPV_FORMAT_DOUBLE, &defaultSpeed);
+
     const char* cmd[] = {"loadfile", url.c_str(), nullptr};
     mpv_command(m_mpv, cmd);
 }
@@ -410,6 +420,9 @@ void Player::stop() {
     // 4. Safely shut down torrent engine after mpv has closed the stream
     TorrentStream::instance().stop();
 
+    double normalSpeed = 1.0;
+    mpv_set_property(m_mpv, "speed", MPV_FORMAT_DOUBLE, &normalSpeed);
+
     m_paused   = true;
     m_finished = false;
     m_fileLoaded.store(false);
@@ -435,6 +448,20 @@ void Player::seekAbsolute(double positionSeconds) {
     std::string pos = std::to_string(positionSeconds);
     const char* cmd[] = {"seek", pos.c_str(), "absolute", nullptr};
     mpv_command(m_mpv, cmd);
+}
+
+void Player::setSpeed(double speed) {
+    if (!m_mpv) return;
+    if (speed < 0.25) speed = 0.25;
+    if (speed > 4.0) speed = 4.0;
+    mpv_set_property(m_mpv, "speed", MPV_FORMAT_DOUBLE, &speed);
+}
+
+double Player::getSpeed() const {
+    if (!m_mpv) return 1.0;
+    double speed = 1.0;
+    mpv_get_property(m_mpv, "speed", MPV_FORMAT_DOUBLE, &speed);
+    return speed;
 }
 
 void Player::changeVolume(double delta) {
@@ -539,15 +566,28 @@ void Player::update() {
             }
             case MPV_EVENT_END_FILE: {
                 mpv_event_end_file* end = (mpv_event_end_file*)event->data;
-                printf("[Player] End file reason: %d, error code: %d, pos: %.2f\n",
-                       end->reason, end->error, m_cachedPos.load());
-                if (end->reason == MPV_END_FILE_REASON_EOF && m_cachedPos.load() > 1.0) {
+                double pos = m_cachedPos.load();
+                double duration = m_cachedDuration.load();
+                printf("[Player] End file reason: %d, error code: %d, pos: %.2f / %.2f\n",
+                       end->reason, end->error, pos, duration);
+                
+                // Only consider the file genuinely finished if we are near the end of the known duration
+                // (or if duration is unknown but we played a substantial amount).
+                bool isActualEOF = (duration > 10.0 && pos >= duration - 10.0) ||
+                                   (duration <= 0.0 && pos > 30.0 && end->reason == MPV_END_FILE_REASON_EOF);
+
+                if (end->reason == MPV_END_FILE_REASON_EOF && isActualEOF) {
                     m_finished = true;
                 } else if (end->reason == MPV_END_FILE_REASON_ERROR) {
                     m_hasError.store(true);
                     const char* errStr = mpv_error_string(end->error);
                     m_errorMessage = errStr ? errStr : "Playback decode error";
                     printf("[Player] Playback error encountered: %s\n", m_errorMessage.c_str());
+                } else if (end->reason == MPV_END_FILE_REASON_EOF && !isActualEOF) {
+                    // Premature EOF midway through stream (e.g. socket dropout, slow seeders, or demuxer starved)
+                    printf("[Player] Stream ended prematurely at %.2f / %.2f (not finished)\n", pos, duration);
+                    m_hasError.store(true);
+                    m_errorMessage = "Stream interrupted midway (press A or B)";
                 }
                 break;
             }
