@@ -78,6 +78,20 @@ bool AddonManager::loadConfig(const std::string& configPath) {
                 addon.manifest.id = a["id"].GetString();
             }
 
+            if (url.find("opensubtitles") != std::string::npos) {
+                if (addon.manifest.id.empty()) addon.manifest.id = "org.stremio.opensubtitlesv3";
+                if (addon.manifest.name.empty()) addon.manifest.name = "OpenSubtitles v3";
+                if (addon.manifest.resources.empty()) {
+                    ResourceDef r;
+                    r.name = "subtitles";
+                    r.types = {"movie", "series"};
+                    r.idPrefixes = {"tt"};
+                    addon.manifest.resources.push_back(std::move(r));
+                }
+                addon.manifest.types = {"movie", "series"};
+                addon.manifest.idPrefixes = {"tt"};
+            }
+
             // Deduplicate by manifest ID on load — prevents two list entries for
             // the same addon (e.g. Pengu plain URL + Pengu configured URL).
             // Manifests without an ID (not yet fetched) are always added.
@@ -221,6 +235,16 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
                                  const std::string& id) const {
     if (!addon.enabled) return false;
 
+    // Special check for OpenSubtitles:
+    // OpenSubtitles only supports IMDB IDs (starting with "tt").
+    bool isOpenSubtitles = (addon.manifest.id == "org.stremio.opensubtitlesv3" ||
+                            addon.transportUrl.find("opensubtitles") != std::string::npos);
+    if (isOpenSubtitles && resource == "subtitles") {
+        if (!id.empty() && id.rfind("tt", 0) != 0) {
+            return false;
+        }
+    }
+
     for (auto& res : addon.manifest.resources) {
         if (res.name != resource) continue;
 
@@ -233,9 +257,10 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
             if (!typeMatch) continue;
         }
 
-        if (!id.empty() && !res.idPrefixes.empty()) {
+        const auto& prefixes = !res.idPrefixes.empty() ? res.idPrefixes : addon.manifest.idPrefixes;
+        if (!id.empty() && !prefixes.empty()) {
             bool prefixMatch = false;
-            for (auto& prefix : res.idPrefixes) {
+            for (auto& prefix : prefixes) {
                 if (id.substr(0, prefix.size()) == prefix) {
                     prefixMatch = true;
                     break;
@@ -414,6 +439,8 @@ std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
 std::vector<Subtitle> AddonManager::getAllSubtitles(const std::string& type,
                                                      const std::string& id) {
     std::vector<Subtitle> allSubs;
+    if (type.empty() || id.empty()) return allSubs;
+
     std::vector<InstalledAddon> localAddons;
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
@@ -421,11 +448,39 @@ std::vector<Subtitle> AddonManager::getAllSubtitles(const std::string& type,
     }
 
     for (auto& addon : localAddons) {
+        if (!addon.enabled) continue;
+
+        // Fast pre-filter: only process addons that could reasonably provide subtitles
+        bool couldHandleSubtitles = false;
+        for (const auto& res : addon.manifest.resources) {
+            if (res.name == "subtitles") {
+                couldHandleSubtitles = true;
+                break;
+            }
+        }
+        if (!couldHandleSubtitles) {
+            std::string tUrl = addon.transportUrl;
+            std::string aId = addon.manifest.id;
+            for (char& c : tUrl) c = (char)tolower((unsigned char)c);
+            for (char& c : aId) c = (char)tolower((unsigned char)c);
+            if (tUrl.find("opensubtitles") != std::string::npos ||
+                tUrl.find("subtitle") != std::string::npos ||
+                aId.find("opensubtitles") != std::string::npos) {
+                couldHandleSubtitles = true;
+            }
+        }
+        if (!couldHandleSubtitles) continue;
+
         ensureManifest(addon);
         if (!addonHandles(addon, "subtitles", type, id)) continue;
+
         SubtitleResponse resp;
         if (m_client.fetchSubtitles(addon.manifest, type, id, resp)) {
-            for (auto& s : resp.subtitles) allSubs.push_back(std::move(s));
+            for (auto& s : resp.subtitles) {
+                if (!s.url.empty()) {
+                    allSubs.push_back(std::move(s));
+                }
+            }
         }
     }
     return allSubs;

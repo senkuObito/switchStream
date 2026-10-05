@@ -52,6 +52,7 @@ struct AddonManifest {
     std::string logo;
     std::string background;
     std::vector<std::string> types;
+    std::vector<std::string> idPrefixes;
     std::vector<CatalogDef> catalogs;
     std::vector<ResourceDef> resources;
     std::string transportUrl;  // base URL (we add this ourselves)

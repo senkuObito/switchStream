@@ -107,6 +107,7 @@ bool AddonClient::fetchManifest(const std::string& transportUrl, AddonManifest& 
     out.logo        = getString(doc, "logo");
     out.background  = getString(doc, "background");
     out.types       = getStringArray(doc, "types");
+    out.idPrefixes  = getStringArray(doc, "idPrefixes");
     out.transportUrl = transportUrl;
 
     // Parse catalogs
@@ -156,10 +157,14 @@ bool AddonClient::fetchManifest(const std::string& transportUrl, AddonManifest& 
             ResourceDef res;
             if (r.IsString()) {
                 res.name = r.GetString();
+                res.types = out.types;
+                res.idPrefixes = out.idPrefixes;
             } else if (r.IsObject()) {
                 res.name       = getString(r, "name");
                 res.types      = getStringArray(r, "types");
                 res.idPrefixes = getStringArray(r, "idPrefixes");
+                if (res.types.empty()) res.types = out.types;
+                if (res.idPrefixes.empty()) res.idPrefixes = out.idPrefixes;
             }
             out.resources.push_back(std::move(res));
         }
@@ -341,17 +346,19 @@ bool AddonClient::fetchSubtitles(const AddonManifest& addon,
                                   const std::string& type,
                                   const std::string& id,
                                   SubtitleResponse& out) {
+    out.subtitles.clear();
+    if (addon.transportUrl.empty() || type.empty() || id.empty()) return false;
+
     std::string url = baseUrl(addon.transportUrl)
         + "/subtitles/" + type + "/" + id + ".json";
 
-    auto resp = m_http.get(url);
-    if (!resp.ok()) return false;
+    auto resp = m_http.get(url, 15);
+    if (!resp.ok() || resp.body.empty()) return false;
 
     Document doc;
     doc.Parse(resp.body.c_str());
     if (doc.HasParseError() || !doc.IsObject()) return false;
 
-    out.subtitles.clear();
     if (doc.HasMember("subtitles") && doc["subtitles"].IsArray()) {
         for (auto& s : doc["subtitles"].GetArray()) {
             if (!s.IsObject()) continue;

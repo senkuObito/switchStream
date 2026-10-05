@@ -188,6 +188,7 @@ private:
     std::vector<Subtitle> m_addonSubtitles;
     int m_subAddonIndex = 0;
     std::mutex m_subMutex;
+    std::thread m_subSearchThread;
     std::atomic<int> m_subSearchGen{0};
     std::string m_currentPlayingId;
     std::string m_currentPlayingType;

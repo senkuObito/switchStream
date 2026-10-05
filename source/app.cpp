@@ -1949,6 +1949,54 @@ static std::string formatTime(double seconds) {
     return buf;
 }
 
+// Helper to directly resolve an IMDB ID from Cinemeta via a single, lightweight HTTP query
+static std::string resolveImdbIdFromCinemeta(HttpClient& http, const std::string& type, const std::string& title) {
+    if (title.empty()) return "";
+
+    std::string cleanTitle = title;
+    size_t paren = cleanTitle.find('(');
+    if (paren != std::string::npos && paren > 0) {
+        cleanTitle = cleanTitle.substr(0, paren);
+    }
+    while (!cleanTitle.empty() && (cleanTitle.back() == ' ' || cleanTitle.back() == '\t')) {
+        cleanTitle.pop_back();
+    }
+    while (!cleanTitle.empty() && (cleanTitle.front() == ' ' || cleanTitle.front() == '\t')) {
+        cleanTitle.erase(cleanTitle.begin());
+    }
+    if (cleanTitle.empty()) cleanTitle = title;
+
+    std::string encoded;
+    for (char c : cleanTitle) {
+        if (c == ' ') encoded += "%20";
+        else if (c == '&') encoded += "%26";
+        else if (c == '=') encoded += "%3D";
+        else if (c == '/') encoded += "%2F";
+        else encoded += c;
+    }
+
+    std::string catType = (type == "movie") ? "movie" : "series";
+    std::string url = "https://v3-cinemeta.strem.io/catalog/" + catType + "/top/search=" + encoded + ".json";
+
+    auto resp = http.get(url, 15);
+    if (!resp.ok() || resp.body.empty()) return "";
+
+    rapidjson::Document doc;
+    doc.Parse(resp.body.c_str());
+    if (!doc.HasParseError() && doc.IsObject() && doc.HasMember("metas") && doc["metas"].IsArray()) {
+        for (auto& m : doc["metas"].GetArray()) {
+            if (m.IsObject() && m.HasMember("id") && m["id"].IsString()) {
+                std::string resId = m["id"].GetString();
+                if (resId.rfind("tt", 0) == 0) {
+                    return resId;
+                }
+            }
+        }
+    }
+
+    return "";
+}
+
 void App::fetchAddonSubtitles() {
     m_wasPlayingBeforeSubSearch = !m_player.isPaused();
     m_player.pause();
@@ -1960,35 +2008,33 @@ void App::fetchAddonSubtitles() {
     }
     m_subAddonIndex = 0;
 
+    if (m_subSearchThread.joinable()) {
+        m_subSearchThread.join();
+    }
+
     int currentGen = ++m_subSearchGen;
     std::string type = m_currentPlayingType.empty() ? m_detailMeta.type : m_currentPlayingType;
     std::string id = m_currentPlayingId.empty() ? m_detailMeta.id : m_currentPlayingId;
     std::string title = m_detailMeta.name;
 
-    std::thread([this, type, id, title, currentGen]() {
+    m_subSearchThread = std::thread([this, type, id, title, currentGen]() {
         printf("[Subtitles] Fetching addon subtitles for type='%s', id='%s', title='%s'\n",
                type.c_str(), id.c_str(), title.c_str());
 
-        std::vector<Subtitle> subs = m_addonManager.getAllSubtitles(type, id);
+        std::vector<Subtitle> subs;
 
-        // If no subtitles found and ID is not an IMDB ID (doesn't start with "tt"),
-        // try to resolve IMDB ID by searching Cinemeta with the media title!
-        if (subs.empty() && id.rfind("tt", 0) != 0 && !title.empty()) {
-            printf("[Subtitles] ID '%s' is not an IMDB id, searching Cinemeta for '%s'...\n",
-                   id.c_str(), title.c_str());
-            auto results = m_addonManager.search(title);
-            std::string imdbId;
-            for (const auto& r : results) {
-                if (r.id.rfind("tt", 0) == 0) {
-                    imdbId = r.id;
-                    break;
-                }
-            }
+        // If ID already starts with "tt", query subtitle addons directly
+        if (id.rfind("tt", 0) == 0) {
+            subs = m_addonManager.getAllSubtitles(type, id);
+        } else {
+            // Non-IMDb ID (e.g. "kisskh:...", "kitsu:..."):
+            // OpenSubtitles requires IMDb IDs. Resolve via Cinemeta!
+            std::string imdbId = resolveImdbIdFromCinemeta(m_http, type, title);
             if (!imdbId.empty()) {
                 std::string targetId = imdbId;
                 if (type == "series") {
                     int s = 1, e = 1;
-                    if (!m_detailEpisodes.empty() && m_detailEpisodeIndex < (int)m_detailEpisodes.size()) {
+                    if (!m_detailEpisodes.empty() && m_detailEpisodeIndex >= 0 && m_detailEpisodeIndex < (int)m_detailEpisodes.size()) {
                         s = m_detailEpisodes[m_detailEpisodeIndex].season;
                         e = m_detailEpisodes[m_detailEpisodeIndex].episode;
                         if (s <= 0) s = 1;
@@ -1996,8 +2042,14 @@ void App::fetchAddonSubtitles() {
                     }
                     targetId += ":" + std::to_string(s) + ":" + std::to_string(e);
                 }
-                printf("[Subtitles] Resolved IMDB ID: '%s', querying OpenSubtitles...\n", targetId.c_str());
+                printf("[Subtitles] Resolved IMDB ID for '%s': '%s', querying OpenSubtitles...\n",
+                       title.c_str(), targetId.c_str());
                 subs = m_addonManager.getAllSubtitles(type, targetId);
+            }
+
+            // If still empty, check other addons with original ID
+            if (subs.empty()) {
+                subs = m_addonManager.getAllSubtitles(type, id);
             }
         }
 
@@ -2007,7 +2059,7 @@ void App::fetchAddonSubtitles() {
             m_subAddonLoading = false;
             printf("[Subtitles] Found %zu addon subtitles\n", m_addonSubtitles.size());
         }
-    }).detach();
+    });
 }
 
 void App::applyAddonSubtitle(const Subtitle& sub) {
@@ -2022,7 +2074,7 @@ void App::applyAddonSubtitle(const Subtitle& sub) {
 #endif
     std::string subPath = subDir + "/addon_sub.srt";
 
-    auto resp = m_http.get(sub.url);
+    auto resp = m_http.get(sub.url, 20);
     if (resp.ok() && !resp.body.empty()) {
         FILE* f = fopen(subPath.c_str(), "wb");
         if (f) {
@@ -2038,7 +2090,9 @@ void App::applyAddonSubtitle(const Subtitle& sub) {
 
     m_subAddonMode = false;
     m_showSubList = false;
-    m_player.resume();
+    if (m_wasPlayingBeforeSubSearch) {
+        m_player.resume();
+    }
 }
 
 void App::cancelAddonSubtitle() {
@@ -2046,7 +2100,9 @@ void App::cancelAddonSubtitle() {
     m_subAddonLoading = false;
     m_subAddonMode = false;
     m_showSubList = false;
-    m_player.resume();
+    if (m_wasPlayingBeforeSubSearch) {
+        m_player.resume();
+    }
 }
 
 static std::string formatStreamDisplay(const Stream& s) {
@@ -4181,6 +4237,9 @@ void App::shutdown() {
     }
     if (m_installThread.joinable()) {
         m_installThread.join(); // returns fast: curl aborted
+    }
+    if (m_subSearchThread.joinable()) {
+        m_subSearchThread.join();
     }
 
     // 2. Save configurations

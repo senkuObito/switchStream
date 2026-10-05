@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <csignal>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #ifdef __SWITCH__
 #include <switch.h>
@@ -45,7 +46,7 @@ int main(int argc, char* argv[]) {
     mkdir("sdmc:/switch", 0777);
     mkdir("sdmc:/switch/switchstream", 0777);
     freopen("sdmc:/switch/switchstream/log.txt", "w", stdout);
-    freopen("sdmc:/switch/switchstream/log.txt", "w", stderr);
+    dup2(fileno(stdout), STDERR_FILENO);
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     plInitialize(PlServiceType_User);
