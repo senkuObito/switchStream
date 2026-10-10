@@ -67,6 +67,8 @@ private:
     void loadHomeCatalogs(bool force = false);
     void cleanCatalogImageCache();
     void refreshHome();
+    std::vector<CatalogRow> getHomeDisplayCatalogs();
+    void saveCurrentPlaybackProgress();
     void performSearch(const std::string& query);
     void sortSearchResults();
     void loadDetail(const std::string& type, const std::string& id);
@@ -140,7 +142,7 @@ private:
     bool m_clearPosters = true;
     bool m_clearLogs = true;
     bool m_clearHomeCache = true;
-    bool m_clearHistory = false;
+    bool m_clearHistory = true;
 
     // Cache size tracking
     uint32_t m_lastCacheCalcTime = 0;
@@ -206,6 +208,10 @@ private:
     bool m_isScrubbing = false;
     double m_scrubStartPos = 0.0;
     double m_scrubCurrentPos = 0.0;
+
+    // Resume playback state
+    bool m_needsResume = false;
+    double m_resumeProgress = 0.0;
 
     // 2X Speed & Joycon long-press handling
     bool m_is2xSpeed = false;

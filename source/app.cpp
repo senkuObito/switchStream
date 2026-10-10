@@ -58,7 +58,7 @@ struct DiscoverAddon {
 static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     // --- Catalog & Streaming Addons (provide home content & streams) ---
     {"Cinemeta", "The official addon for movie and series catalogs & search.", "https://v3-cinemeta.strem.io/manifest.json"},
-    {"yastream", "Asian dramas, series & movies catalog with direct HTTP streaming.", "https://yastream.tamthai.de/manifest.json"},
+    {"yastream", "Asian dramas, series & movies catalog with direct HTTP streaming.", "https://yastream-dev.tamthai.de/eyJjYXRhbG9ncyI6W10sImNhdGFsb2ciOlsia2lzc2toIiwib25ldG91Y2h0diJdLCJzdHJlYW0iOlsia2lzc2toIiwib25ldG91Y2h0diIsIm1rdmRyYW1hIiwiaWRyYW1hIiwia2twaGltIiwib3BoaW0iXSwibnNmdyI6ZmFsc2UsImluZm8iOmZhbHNlLCJwb3N0ZXIiOiJ4cmRiIiwibWZwVXJsIjoiIiwidGJLZXkiOiIiLCJtZnBQYXNzIjoiIn0=/manifest.json"},
     {"K-Drama Crush", "Asian and Korean drama catalog (curated feeds & latest titles).", "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json"},
     {"Streaming Catalogs", "Trending movies & series from Netflix, HBO Max, Disney+, Prime Video, Apple TV+.", "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json"},
     {"Dramayo", "Asian dramas, anime, series and movies catalog & streaming access.", "https://dramayo.stream/manifest.json"},
@@ -209,7 +209,7 @@ bool App::init() {
             "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
             "https://dramayo.stream/manifest.json",
             "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json",
-            "https://yastream.tamthai.de/manifest.json",
+            "https://yastream-dev.tamthai.de/eyJjYXRhbG9ncyI6W10sImNhdGFsb2ciOlsia2lzc2toIiwib25ldG91Y2h0diJdLCJzdHJlYW0iOlsia2lzc2toIiwib25ldG91Y2h0diIsIm1rdmRyYW1hIiwiaWRyYW1hIiwia2twaGltIiwib3BoaW0iXSwibnNmdyI6ZmFsc2UsImluZm8iOmZhbHNlLCJwb3N0ZXIiOiJ4cmRiIiwibWZwVXJsIjoiIiwidGJLZXkiOiIiLCJtZnBQYXNzIjoiIn0=/manifest.json",
             "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
             "https://indiastreams.rdata.in/manifest.json",
             "https://opensubtitles-v3.strem.io/manifest.json"
@@ -239,12 +239,17 @@ bool App::init() {
             bool isStreamVix = (tUrl.find("streamvix") != std::string::npos || aName.find("streamvix") != std::string::npos || aId.find("streamvix") != std::string::npos);
             bool isWatchHub = (tUrl.find("watchhub") != std::string::npos || aName.find("watchhub") != std::string::npos || aId.find("watchhub") != std::string::npos);
             bool isDebridSearch = (tUrl.find("debrid-search") != std::string::npos || aName.find("debrid-search") != std::string::npos || aId.find("debrid-search") != std::string::npos || aName.find("debrid search") != std::string::npos);
+            bool isDeadStreamingCatalogs = (tUrl.find("streaming-catalogs.baby-beamup.club") != std::string::npos || aId.find("streaming_catalogs.baby_beamup") != std::string::npos);
+            bool isOldYastream = (tUrl.find("yastream.tamthai.de") != std::string::npos && tUrl.find("yastream-dev") == std::string::npos);
 
             if (isPengu || isKitsu || isAio || isMediaFusion || isNebula || isMorpheus || isStreamAsia || isCyberflix ||
-                isComet || isSwordWatch || isNoDebrid || isStreamVix || isWatchHub || isDebridSearch) {
+                isComet || isSwordWatch || isNoDebrid || isStreamVix || isWatchHub || isDebridSearch || isDeadStreamingCatalogs || isOldYastream) {
                 printf("[App] Removing deprecated/offline addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
                 m_addonManager.removeAddon(a.transportUrl);
                 m_addonManager.removeAddon(a.manifest.id);
+                if (isOldYastream) {
+                    m_addonManager.installAddon("https://yastream-dev.tamthai.de/eyJjYXRhbG9ncyI6W10sImNhdGFsb2ciOlsia2lzc2toIiwib25ldG91Y2h0diJdLCJzdHJlYW0iOlsia2lzc2toIiwib25ldG91Y2h0diIsIm1rdmRyYW1hIiwiaWRyYW1hIiwia2twaGltIiwib3BoaW0iXSwibnNmdyI6ZmFsc2UsImluZm8iOmZhbHNlLCJwb3N0ZXIiOiJ4cmRiIiwibWZwVXJsIjoiIiwidGJLZXkiOiIiLCJtZnBQYXNzIjoiIn0=/manifest.json");
+                }
                 updatedAddons = true;
             }
         }
@@ -370,9 +375,35 @@ void App::run() {
             m_player.play("torrent://stream", torrentHeaders);
         }
 
-        // If playing and finished (EOF reached after actual playback), go back to detail screen
+        // Resume seeking once video file is loaded and duration is known
+        if (m_screen == Screen::PLAYER && m_needsResume && m_player.isFileLoaded() && m_player.getDuration() > 10.0) {
+            double dur = m_player.getDuration();
+            double seekPos = m_resumeProgress * dur;
+            if (seekPos > 3.0 && seekPos < dur - 15.0) {
+                printf("[Player] Resuming playback at %.1fs (%.1f%% of %.1fs)\n", seekPos, m_resumeProgress * 100.0, dur);
+                m_player.seekAbsolute(seekPos);
+            }
+            m_needsResume = false;
+            m_resumeProgress = 0.0;
+        }
+
+        // Periodic progress save every 10 seconds while playing
+        static uint32_t lastProgressSaveTime = 0;
+        if (m_screen == Screen::PLAYER && SDL_GetTicks() - lastProgressSaveTime > 10000) {
+            lastProgressSaveTime = SDL_GetTicks();
+            if (m_player.getPosition() > 2.0 && m_player.getDuration() > 10.0) {
+                saveCurrentPlaybackProgress();
+            }
+        }
+
+        // If playing and finished (EOF reached after actual playback), mark finished and go back to detail screen
         if (m_screen == Screen::PLAYER && m_player.isFinished() && !TorrentStream::instance().isOpening() && !m_torrentBuffering) {
-            printf("[App] Playback reached EOF, returning to detail screen\n");
+            printf("[App] Playback reached EOF, marking completed and returning to detail screen\n");
+            if (!m_detailMeta.id.empty()) {
+                std::string vidId = (!m_currentPlayingEpisodeId.empty()) ? m_currentPlayingEpisodeId : m_detailMeta.id;
+                m_library.updateProgress(m_detailMeta.id, m_detailMeta.type, m_detailMeta.name, m_detailMeta.poster, vidId, 1.0);
+                m_library.save(LIB_FILE);
+            }
             m_is2xSpeed = false;
             m_rButtonDownTime = 0;
             m_rButtonLongPressed = false;
@@ -554,6 +585,7 @@ void App::run() {
                     case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:key |= HidNpadButton_R; break;
                     case SDL_CONTROLLER_BUTTON_START:
                         if (m_screen == Screen::PLAYER) {
+                            saveCurrentPlaybackProgress();
                             m_player.stop();
                             m_screen = Screen::DETAIL;
                         } else {
@@ -669,11 +701,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
             break;
         }
 
-        std::vector<CatalogRow> localCatalogs;
-        {
-            std::lock_guard<std::mutex> lock(m_homeMutex);
-            localCatalogs = m_homeCatalogs;
-        }
+        std::vector<CatalogRow> localCatalogs = getHomeDisplayCatalogs();
 
         if (kDown & HidNpadButton_Down) {
             m_homeRowIndex++;
@@ -1280,6 +1308,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
             if (m_torrentPollingThread.joinable()) {
                 m_torrentPollingThread.join();
             }
+            saveCurrentPlaybackProgress();
             m_player.stop();
             m_screen = Screen::DETAIL;
             break;
@@ -1588,11 +1617,7 @@ void App::handleTouch(int x, int y) {
         }
 
         // ─── Catalog Posters Grid ───
-        std::vector<CatalogRow> localCatalogs;
-        {
-            std::lock_guard<std::mutex> lock(m_homeMutex);
-            localCatalogs = m_homeCatalogs;
-        }
+        std::vector<CatalogRow> localCatalogs = getHomeDisplayCatalogs();
         if (localCatalogs.empty() || m_loadingHome) return;
 
         int startY = 74;
@@ -2478,6 +2503,7 @@ void App::handleTouch(int x, int y) {
                     std::lock_guard<std::mutex> lock(m_torrentMutex);
                     m_torrentPollingActive = false;
                 }
+                saveCurrentPlaybackProgress();
                 m_player.stop();
                 m_screen = Screen::DETAIL;
                 return;
@@ -3637,6 +3663,9 @@ void App::renderPlayer() {
 }
 
 static std::string formatCatalogTitle(const std::string& addonName, const std::string& catalogName) {
+    if (addonName == "SwitchStream" && catalogName == "Continue Watching") {
+        return "▶  Continue Watching";
+    }
     if (addonName == "yastream") {
         std::string lowerC = catalogName;
         for (char& c : lowerC) c = (char)tolower((unsigned char)c);
@@ -3709,11 +3738,7 @@ void App::renderHome() {
     drawRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {44, 52, 74, 180});
     drawTextCentered("[+] Exit", SCREEN_W - 85, 23, TEXT_SECONDARY, m_fontSmall);
 
-    std::vector<CatalogRow> localCatalogs;
-    {
-        std::lock_guard<std::mutex> lock(m_homeMutex);
-        localCatalogs = m_homeCatalogs;
-    }
+    std::vector<CatalogRow> localCatalogs = getHomeDisplayCatalogs();
 
     if (m_loadingHome && localCatalogs.empty()) {
         drawSpinner(SCREEN_W/2, SCREEN_H/2 - 40, 24);
@@ -3774,6 +3799,16 @@ void App::renderHome() {
             std::string name = row.items[c].name;
             if (name.size() > 19) name = name.substr(0, 17) + "..";
             drawTextCentered(name, cardX + POSTER_W / 2, cardY + POSTER_H - 26, TEXT_PRIMARY, m_fontSmall);
+
+            // 4b. Watch progress bar if item has active watch progress
+            const LibraryItem* libItem = m_library.getItem(row.items[c].id);
+            if (libItem && libItem->progress > 0.01 && libItem->progress < 0.99) {
+                int barH = 5;
+                int barY = cardY + POSTER_H - barH;
+                drawFilledRect(cardX, barY, POSTER_W, barH, {10, 14, 22, 220});
+                int fillW = std::clamp((int)(POSTER_W * libItem->progress), 2, POSTER_W);
+                drawFilledRect(cardX, barY, fillW, barH, ACCENT);
+            }
 
             // 5. Border: Glowing Cyan on selected, sleek dark border on unselected
             if (selected) {
@@ -4495,7 +4530,7 @@ void App::renderSettings() {
             {"Poster Images Cache", m_clearPosters, m_cachedImgBytes},
             {"Application Debug Logs", m_clearLogs, m_cachedLogBytes},
             {"Home Catalogs Cache", m_clearHomeCache, m_cachedHomeBytes},
-            {"Watch History & Bookmarks", m_clearHistory, m_cachedHistoryBytes}
+            {"Watch History & Continue Watching", m_clearHistory, m_cachedHistoryBytes}
         };
 
         int rowY = modalY + 95;
@@ -5557,6 +5592,49 @@ void App::loadHomeCatalogs(bool force) {
     });
 }
 
+std::vector<CatalogRow> App::getHomeDisplayCatalogs() {
+    std::vector<CatalogRow> localCatalogs;
+    {
+        std::lock_guard<std::mutex> lock(m_homeMutex);
+        localCatalogs = m_homeCatalogs;
+    }
+
+    auto continueWatching = m_library.getContinueWatching(15);
+    if (!continueWatching.empty()) {
+        CatalogRow cwRow;
+        cwRow.addonName = "SwitchStream";
+        cwRow.catalogName = "Continue Watching";
+        for (const auto& item : continueWatching) {
+            MetaItem meta;
+            meta.id = item.id;
+            meta.type = item.type;
+            meta.name = item.name;
+            meta.poster = item.poster;
+            cwRow.items.push_back(std::move(meta));
+        }
+        localCatalogs.insert(localCatalogs.begin(), std::move(cwRow));
+    }
+    return localCatalogs;
+}
+
+void App::saveCurrentPlaybackProgress() {
+    double pos = m_player.getPosition();
+    double dur = m_player.getDuration();
+    if (!m_detailMeta.id.empty()) {
+        double prog = 0.01;
+        if (dur > 10.0 && pos > 0.0) {
+            prog = std::clamp(pos / dur, 0.0, 1.0);
+        }
+        std::string vidId = (!m_currentPlayingEpisodeId.empty()) ? m_currentPlayingEpisodeId : m_detailMeta.id;
+        m_library.updateProgress(m_detailMeta.id, m_detailMeta.type,
+                                m_detailMeta.name, m_detailMeta.poster,
+                                vidId, prog);
+        m_library.save(LIB_FILE);
+        printf("[App] Saved watch progress for '%s': %.1f%% (pos=%.1fs, dur=%.1fs)\n",
+               m_detailMeta.name.c_str(), prog * 100.0, pos, dur);
+    }
+}
+
 void App::performSearch(const std::string& query) {
     if (m_searchThread.joinable()) {
         m_searchThread.join();
@@ -6042,6 +6120,31 @@ void App::playStream(const Stream& stream) {
         m_currentPlayingId = m_detailMeta.id;
     }
 
+    // Check saved progress to resume playback
+    const LibraryItem* existingItem = m_library.getItem(m_detailMeta.id);
+    if (existingItem && existingItem->progress > 0.02 && existingItem->progress < 0.95) {
+        if (m_detailMeta.type != "series" || existingItem->videoId.empty() || existingItem->videoId == m_currentPlayingEpisodeId || m_currentPlayingEpisodeId.empty()) {
+            m_needsResume = true;
+            m_resumeProgress = existingItem->progress;
+            printf("[App] Found saved progress for '%s': %.1f%% - will resume on load\n",
+                   m_detailMeta.name.c_str(), existingItem->progress * 100.0);
+        } else {
+            m_needsResume = false;
+            m_resumeProgress = 0.0;
+        }
+    } else {
+        m_needsResume = false;
+        m_resumeProgress = 0.0;
+    }
+
+    if (!existingItem || existingItem->progress <= 0.01) {
+        std::string vidId = (!m_currentPlayingEpisodeId.empty()) ? m_currentPlayingEpisodeId : m_detailMeta.id;
+        m_library.updateProgress(m_detailMeta.id, m_detailMeta.type,
+                                  m_detailMeta.name, m_detailMeta.poster,
+                                  vidId, 0.01);
+        m_library.save(LIB_FILE);
+    }
+
     {
         std::lock_guard<std::mutex> lock(m_torrentMutex);
         m_lastPlayingMagnet = "";
@@ -6085,11 +6188,6 @@ void App::playStream(const Stream& stream) {
                 m_torrentBuffering = false;
             }
         });
-
-        m_library.updateProgress(m_detailMeta.id, m_detailMeta.type,
-                                  m_detailMeta.name, m_detailMeta.poster,
-                                  m_detailMeta.id, 0.01);
-        m_library.save(LIB_FILE);
         return;
     }
 
@@ -6098,11 +6196,6 @@ void App::playStream(const Stream& stream) {
     m_player.play(playUrl, stream.httpHeaderFields);
     m_screen = Screen::PLAYER;
     m_osdShowTime = SDL_GetTicks();
-
-    m_library.updateProgress(m_detailMeta.id, m_detailMeta.type,
-                              m_detailMeta.name, m_detailMeta.poster,
-                              m_detailMeta.id, 0.01);
-    m_library.save(LIB_FILE);
 }
 
 void App::openSwkbd(std::string& output, const std::string& header) {
