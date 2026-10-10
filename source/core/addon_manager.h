@@ -22,6 +22,7 @@ struct CatalogRow {
     std::string catalogId;
     std::string transportUrl;
     std::vector<MetaItem> items;
+    int sortOrder = 0;
 };
 
 class AddonManager {
@@ -54,6 +55,12 @@ public:
     // Get home screen catalog rows (one per catalog across all addons)
     // Only fetches first page (lightweight)
     std::vector<CatalogRow> getHomeCatalogs(const std::string& type = "");
+
+    // Progressive streaming of catalog rows as soon as each individual row finishes
+    void getHomeCatalogsProgressive(
+        const std::string& type,
+        std::function<void(CatalogRow&& row)> onRowLoaded,
+        std::function<bool()> shouldCancel = nullptr);
 
     // Search across all addons
     std::vector<MetaItem> search(const std::string& query, const std::string& type = "");
@@ -111,6 +118,7 @@ public:
     static std::string getAddonFallbackDesc(const std::string& url);
     static std::string getAddonFallbackId(const std::string& url);
     static std::string getAddonCategoryBadge(const InstalledAddon& addon);
+    static std::vector<CatalogDef> getAddonFallbackCatalogs(const std::string& url);
 
 private:
     // Sort installed addons so enabled/active ones are at the top and disabled ones below

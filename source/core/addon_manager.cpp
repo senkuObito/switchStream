@@ -134,6 +134,52 @@ bool AddonManager::loadConfig(const std::string& configPath) {
                 addon.manifest.id = getAddonFallbackId(url);
             }
 
+            if (a.HasMember("types") && a["types"].IsArray()) {
+                for (auto& t : a["types"].GetArray()) {
+                    if (t.IsString()) addon.manifest.types.push_back(t.GetString());
+                }
+            }
+            if (a.HasMember("idPrefixes") && a["idPrefixes"].IsArray()) {
+                for (auto& p : a["idPrefixes"].GetArray()) {
+                    if (p.IsString()) addon.manifest.idPrefixes.push_back(p.GetString());
+                }
+            }
+            if (a.HasMember("catalogs") && a["catalogs"].IsArray()) {
+                for (auto& c : a["catalogs"].GetArray()) {
+                    if (!c.IsObject()) continue;
+                    CatalogDef cat;
+                    if (c.HasMember("type") && c["type"].IsString()) cat.type = c["type"].GetString();
+                    if (c.HasMember("id") && c["id"].IsString()) cat.id = c["id"].GetString();
+                    if (c.HasMember("name") && c["name"].IsString()) cat.name = c["name"].GetString();
+                    if (c.HasMember("hasRequiredExtras") && c["hasRequiredExtras"].IsBool())
+                        cat.hasRequiredExtras = c["hasRequiredExtras"].GetBool();
+                    if (c.HasMember("extraSupported") && c["extraSupported"].IsArray()) {
+                        for (auto& ex : c["extraSupported"].GetArray()) {
+                            if (ex.IsString()) cat.extraSupported.push_back(ex.GetString());
+                        }
+                    }
+                    addon.manifest.catalogs.push_back(std::move(cat));
+                }
+            }
+            if (a.HasMember("resources") && a["resources"].IsArray()) {
+                for (auto& r : a["resources"].GetArray()) {
+                    if (!r.IsObject()) continue;
+                    ResourceDef res;
+                    if (r.HasMember("name") && r["name"].IsString()) res.name = r["name"].GetString();
+                    if (r.HasMember("types") && r["types"].IsArray()) {
+                        for (auto& t : r["types"].GetArray()) {
+                            if (t.IsString()) res.types.push_back(t.GetString());
+                        }
+                    }
+                    if (r.HasMember("idPrefixes") && r["idPrefixes"].IsArray()) {
+                        for (auto& p : r["idPrefixes"].GetArray()) {
+                            if (p.IsString()) res.idPrefixes.push_back(p.GetString());
+                        }
+                    }
+                    addon.manifest.resources.push_back(std::move(res));
+                }
+            }
+
             if (url.find("opensubtitles") != std::string::npos) {
                 if (addon.manifest.id.empty()) addon.manifest.id = "org.stremio.opensubtitlesv3";
                 if (addon.manifest.name.empty()) addon.manifest.name = "OpenSubtitles v3";
@@ -234,6 +280,81 @@ bool AddonManager::saveConfig(const std::string& configPath) const {
             writer.Key("version");
             writer.String(addon.manifest.version.c_str());
         }
+
+        // Save types
+        if (!addon.manifest.types.empty()) {
+            writer.Key("types");
+            writer.StartArray();
+            for (const auto& t : addon.manifest.types) {
+                writer.String(t.c_str());
+            }
+            writer.EndArray();
+        }
+
+        // Save idPrefixes
+        if (!addon.manifest.idPrefixes.empty()) {
+            writer.Key("idPrefixes");
+            writer.StartArray();
+            for (const auto& p : addon.manifest.idPrefixes) {
+                writer.String(p.c_str());
+            }
+            writer.EndArray();
+        }
+
+        // Save catalogs
+        if (!addon.manifest.catalogs.empty()) {
+            writer.Key("catalogs");
+            writer.StartArray();
+            for (const auto& cat : addon.manifest.catalogs) {
+                writer.StartObject();
+                writer.Key("type");
+                writer.String(cat.type.c_str());
+                writer.Key("id");
+                writer.String(cat.id.c_str());
+                writer.Key("name");
+                writer.String(cat.name.c_str());
+                if (cat.hasRequiredExtras) {
+                    writer.Key("hasRequiredExtras");
+                    writer.Bool(cat.hasRequiredExtras);
+                }
+                if (!cat.extraSupported.empty()) {
+                    writer.Key("extraSupported");
+                    writer.StartArray();
+                    for (const auto& ex : cat.extraSupported) {
+                        writer.String(ex.c_str());
+                    }
+                    writer.EndArray();
+                }
+                writer.EndObject();
+            }
+            writer.EndArray();
+        }
+
+        // Save resources
+        if (!addon.manifest.resources.empty()) {
+            writer.Key("resources");
+            writer.StartArray();
+            for (const auto& res : addon.manifest.resources) {
+                writer.StartObject();
+                writer.Key("name");
+                writer.String(res.name.c_str());
+                if (!res.types.empty()) {
+                    writer.Key("types");
+                    writer.StartArray();
+                    for (const auto& t : res.types) writer.String(t.c_str());
+                    writer.EndArray();
+                }
+                if (!res.idPrefixes.empty()) {
+                    writer.Key("idPrefixes");
+                    writer.StartArray();
+                    for (const auto& p : res.idPrefixes) writer.String(p.c_str());
+                    writer.EndArray();
+                }
+                writer.EndObject();
+            }
+            writer.EndArray();
+        }
+
         writer.EndObject();
     }
     writer.EndArray();
@@ -472,7 +593,12 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
         } else if (resource == "catalog") {
             if (low.find("catalog") != std::string::npos ||
                 low.find("cinemeta") != std::string::npos ||
-                low.find("kdramacrush") != std::string::npos) {
+                low.find("kdramacrush") != std::string::npos ||
+                low.find("yastream") != std::string::npos ||
+                low.find("tamthai") != std::string::npos ||
+                low.find("cyberflix") != std::string::npos ||
+                low.find("animestream") != std::string::npos ||
+                low.find("watchhub") != std::string::npos) {
                 return true;
             }
         }
@@ -481,65 +607,157 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
     return false;
 }
 
-// ─── Parallel home catalog fetch ─────────────────────────────────────────────
-// Each addon is fetched concurrently via std::async so total load time is
-// the slowest single addon instead of the sum of all addon times.
+// ─── Progressive home catalog fetch ──────────────────────────────────────────
+// Fast progressive streaming: stream-only addons are skipped, Cinemeta is prioritized,
+// and onRowLoaded is invoked immediately as each row arrives (e.g. ~180ms for Cinemeta).
 
-std::vector<CatalogRow> AddonManager::getHomeCatalogs(const std::string& type) {
+void AddonManager::getHomeCatalogsProgressive(
+    const std::string& type,
+    std::function<void(CatalogRow&& row)> onRowLoaded,
+    std::function<bool()> shouldCancel)
+{
     std::vector<InstalledAddon> localAddons;
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
         localAddons = m_addons;
     }
 
-    using RowVec = std::vector<CatalogRow>;
-    std::vector<std::future<RowVec>> futures;
-    futures.reserve(localAddons.size());
+    struct CatalogJob {
+        InstalledAddon addon;
+        CatalogDef cat;
+        int sortOrder = 0;
+    };
+    std::vector<CatalogJob> jobs;
+    int nextSortOrder = 0;
 
-    for (auto addon : localAddons) {
+    for (auto& addon : localAddons) {
         if (!addon.enabled) continue;
-        futures.push_back(std::async(std::launch::async,
-            [this, addon, type]() mutable -> RowVec {
-                ensureManifest(addon);
-                std::vector<std::future<CatalogRow>> catFutures;
-                int count = 0;
-                for (auto& cat : addon.manifest.catalogs) {
-                    if (!type.empty() && cat.type != type) continue;
-                    if (cat.hasRequiredExtras) continue;
-                    if (++count > 4) break; // Limit to 4 primary catalogs per addon on home screen
 
-                    catFutures.push_back(std::async(std::launch::async,
-                        [this, addon, cat]() -> CatalogRow {
-                            CatalogRow row;
-                            row.addonName    = addon.manifest.name;
-                            row.catalogName  = cat.name.empty() ? cat.id : cat.name;
-                            row.type         = cat.type;
-                            row.catalogId    = cat.id;
-                            row.transportUrl = addon.transportUrl;
+        // Determine if this addon provides catalogs
+        bool isCatalogProvider = false;
+        for (const auto& res : addon.manifest.resources) {
+            if (res.name == "catalog") {
+                isCatalogProvider = true;
+                break;
+            }
+        }
+        if (!isCatalogProvider && !addon.manifest.catalogs.empty()) {
+            isCatalogProvider = true;
+        }
 
-                            CatalogResponse resp;
-                            if (m_client.fetchCatalog(addon.manifest, cat.type, cat.id, 0, resp)) {
-                                row.items = std::move(resp.metas);
-                            }
-                            return row;
-                        }));
-                }
-                RowVec rows;
-                for (auto& cf : catFutures) {
-                    auto r = cf.get();
-                    if (!r.items.empty()) {
-                        rows.push_back(std::move(r));
+        // If manifest resources & catalogs were empty, check URL / ID fallbacks
+        if (!isCatalogProvider && addon.manifest.resources.empty() && addon.manifest.catalogs.empty()) {
+            std::string low = addon.transportUrl + " " + addon.manifest.id;
+            for (char& c : low) c = (char)tolower((unsigned char)c);
+            if (low.find("cinemeta") != std::string::npos ||
+                low.find("cyberflix") != std::string::npos ||
+                low.find("yastream") != std::string::npos ||
+                low.find("tamthai") != std::string::npos ||
+                low.find("dramayo") != std::string::npos ||
+                low.find("kdramacrush") != std::string::npos ||
+                low.find("animestream") != std::string::npos ||
+                low.find("catalog") != std::string::npos ||
+                low.find("watchhub") != std::string::npos) {
+                isCatalogProvider = true;
+            }
+        }
+
+        // Skip stream-only and subtitle-only addons completely!
+        if (!isCatalogProvider) {
+            continue;
+        }
+
+        // If catalogs list is empty, fill from fallback
+        if (addon.manifest.catalogs.empty()) {
+            addon.manifest.catalogs = getAddonFallbackCatalogs(addon.transportUrl);
+        }
+
+        // If still empty, fetch manifest quickly
+        if (addon.manifest.catalogs.empty()) {
+            if (m_client.fetchManifest(addon.transportUrl, addon.manifest)) {
+                std::lock_guard<std::mutex> lock(m_addonsMutex);
+                for (auto& a : m_addons) {
+                    if (a.transportUrl == addon.transportUrl) {
+                        a.manifest = addon.manifest;
+                        break;
                     }
                 }
-                return rows;
-            }));
+            }
+        }
+
+        int count = 0;
+        for (const auto& cat : addon.manifest.catalogs) {
+            if (!type.empty() && cat.type != type) continue;
+            if (cat.hasRequiredExtras) continue;
+            if (++count > 4) break; // Limit to 4 primary catalogs per addon
+            jobs.push_back({addon, cat, nextSortOrder++});
+        }
     }
 
-    std::vector<CatalogRow> rows;
-    for (auto& fut : futures) {
-        auto addonRows = fut.get();
-        for (auto& r : addonRows) rows.push_back(std::move(r));
+    if (jobs.empty() || (shouldCancel && shouldCancel())) return;
+
+    // Prioritize Cinemeta to the front so Popular Movies and Series are fetched first
+    std::stable_sort(jobs.begin(), jobs.end(), [](const CatalogJob& a, const CatalogJob& b) {
+        bool aCinemeta = (a.addon.transportUrl.find("cinemeta") != std::string::npos ||
+                          a.addon.manifest.id.find("cinemeta") != std::string::npos);
+        bool bCinemeta = (b.addon.transportUrl.find("cinemeta") != std::string::npos ||
+                          b.addon.manifest.id.find("cinemeta") != std::string::npos);
+        if (aCinemeta != bCinemeta) return aCinemeta > bCinemeta;
+        return a.sortOrder < b.sortOrder;
+    });
+
+    // Re-index sortOrder after Cinemeta prioritization so row ordering is 0, 1, 2...
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        jobs[i].sortOrder = (int)i;
     }
+
+    // Launch all catalog requests concurrently
+    std::vector<std::future<void>> futures;
+    futures.reserve(jobs.size());
+
+    for (const auto& job : jobs) {
+        if (shouldCancel && shouldCancel()) break;
+        futures.push_back(std::async(std::launch::async, [this, job, onRowLoaded, shouldCancel]() {
+            if (shouldCancel && shouldCancel()) return;
+
+            CatalogResponse resp;
+            if (m_client.fetchCatalog(job.addon.manifest, job.cat.type, job.cat.id, 0, resp)) {
+                if (shouldCancel && shouldCancel()) return;
+                if (!resp.metas.empty()) {
+                    CatalogRow row;
+                    row.addonName = job.addon.manifest.name.empty() ?
+                        getAddonFallbackName(job.addon.transportUrl) : job.addon.manifest.name;
+                    row.catalogName = job.cat.name.empty() ? job.cat.id : job.cat.name;
+                    row.type = job.cat.type;
+                    row.catalogId = job.cat.id;
+                    row.transportUrl = job.addon.transportUrl;
+                    row.sortOrder = job.sortOrder;
+                    row.items = std::move(resp.metas);
+                    if (onRowLoaded) {
+                        onRowLoaded(std::move(row));
+                    }
+                }
+            }
+        }));
+    }
+
+    // Wait for all to complete
+    for (auto& f : futures) {
+        f.wait();
+    }
+}
+
+std::vector<CatalogRow> AddonManager::getHomeCatalogs(const std::string& type) {
+    std::vector<CatalogRow> rows;
+    std::mutex mtx;
+    getHomeCatalogsProgressive(type, [&](CatalogRow&& row) {
+        std::lock_guard<std::mutex> lock(mtx);
+        auto it = std::lower_bound(rows.begin(), rows.end(), row,
+            [](const CatalogRow& a, const CatalogRow& b) {
+                return a.sortOrder < b.sortOrder;
+            });
+        rows.insert(it, std::move(row));
+    });
     return rows;
 }
 
@@ -851,6 +1069,30 @@ std::string AddonManager::getAddonCategoryBadge(const InstalledAddon& addon) {
     if (low.find("torrent") != std::string::npos || low.find("stream") != std::string::npos || low.find("debrid") != std::string::npos) return "[Stream Provider]";
     if (low.find("catalog") != std::string::npos || low.find("meta") != std::string::npos || low.find("movie") != std::string::npos || low.find("series") != std::string::npos) return "[Catalog Provider]";
     return "[Addon]";
+}
+
+std::vector<CatalogDef> AddonManager::getAddonFallbackCatalogs(const std::string& url) {
+    std::vector<CatalogDef> cats;
+    std::string low = url;
+    for (char& c : low) c = (char)tolower((unsigned char)c);
+
+    if (low.find("cinemeta") != std::string::npos) {
+        cats.push_back({"movie", "top", "Popular Movies", {"search", "genre", "skip"}, false});
+        cats.push_back({"series", "top", "Popular Series", {"search", "genre", "skip"}, false});
+    } else if (low.find("cyberflix") != std::string::npos) {
+        cats.push_back({"movie", "cyberflix_movies", "CyberFlix Movies", {"search", "genre", "skip"}, false});
+        cats.push_back({"series", "cyberflix_series", "CyberFlix Series", {"search", "genre", "skip"}, false});
+    } else if (low.find("yastream") != std::string::npos || low.find("tamthai") != std::string::npos) {
+        cats.push_back({"movie", "kisskh", "KissKH Movies", {"search", "genre", "skip"}, false});
+        cats.push_back({"series", "onetouchtv", "OneTouchTV Series", {"search", "genre", "skip"}, false});
+    } else if (low.find("dramayo") != std::string::npos || low.find("kdramacrush") != std::string::npos) {
+        cats.push_back({"series", "kdramacrush_catalog", "Asian Dramas", {"search", "genre", "skip"}, false});
+    } else if (low.find("animestream") != std::string::npos) {
+        cats.push_back({"anime", "animestream_catalog", "Anime", {"search", "genre", "skip"}, false});
+    } else if (low.find("watchhub") != std::string::npos) {
+        cats.push_back({"movie", "watchhub", "WatchHub", {"search", "genre", "skip"}, false});
+    }
+    return cats;
 }
 
 } // namespace ss

@@ -21,6 +21,7 @@
 
 #ifdef __SWITCH__
 #include <switch.h>
+#include <malloc.h>
 #else
 #include <sys/resource.h>
 #endif
@@ -1618,7 +1619,7 @@ void App::handleTouch(int x, int y) {
 
         // ─── Catalog Posters Grid ───
         std::vector<CatalogRow> localCatalogs = getHomeDisplayCatalogs();
-        if (localCatalogs.empty() || m_loadingHome) return;
+        if (localCatalogs.empty()) return;
 
         int startY = 74;
         int visibleRows = 2;
@@ -4657,10 +4658,10 @@ void App::renderResourceHUD() {
     if (m_addonManager.getShowRamUsage()) {
         uint64_t usedRamMb = 0;
 #ifdef __SWITCH__
-        u64 usedMem = 0;
-        if (R_SUCCEEDED(svcGetInfo(&usedMem, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0))) {
-            usedRamMb = usedMem / (1024 * 1024);
-        }
+        struct mallinfo mi = mallinfo();
+        size_t usedBytes = (size_t)mi.uordblks + (size_t)mi.hblkhd;
+        usedRamMb = (uint64_t)(usedBytes / (1024 * 1024));
+        if (usedRamMb == 0 && usedBytes > 0) usedRamMb = 1;
 #else
         struct rusage usage;
         if (getrusage(RUSAGE_SELF, &usage) == 0) {
@@ -5371,6 +5372,7 @@ bool App::saveHomeCache(const std::string& path, const std::vector<CatalogRow>& 
         writer.Key("type");         writer.String(row.type.c_str());
         writer.Key("catalogId");    writer.String(row.catalogId.c_str());
         writer.Key("transportUrl"); writer.String(row.transportUrl.c_str());
+        writer.Key("sortOrder");    writer.Int(row.sortOrder);
         writer.Key("items");
         writer.StartArray();
         for (const auto& item : row.items) {
@@ -5417,6 +5419,7 @@ bool App::loadHomeCache(const std::string& path, std::vector<CatalogRow>& outCat
         if (r.HasMember("type") && r["type"].IsString()) row.type = r["type"].GetString();
         if (r.HasMember("catalogId") && r["catalogId"].IsString()) row.catalogId = r["catalogId"].GetString();
         if (r.HasMember("transportUrl") && r["transportUrl"].IsString()) row.transportUrl = r["transportUrl"].GetString();
+        if (r.HasMember("sortOrder") && r["sortOrder"].IsInt()) row.sortOrder = r["sortOrder"].GetInt();
         if (r.HasMember("items") && r["items"].IsArray()) {
             for (const auto& m : r["items"].GetArray()) {
                 if (!m.IsObject()) continue;
@@ -5579,11 +5582,36 @@ void App::loadHomeCatalogs(bool force) {
 
     m_loadingHome = true;
     m_homeLoadingThread = std::thread([this]() {
-        auto catalogs = m_addonManager.getHomeCatalogs();
+        m_addonManager.getHomeCatalogsProgressive("",
+            [this](CatalogRow&& row) {
+                std::lock_guard<std::mutex> lock(m_homeMutex);
+                bool found = false;
+                for (auto& existing : m_homeCatalogs) {
+                    if (existing.transportUrl == row.transportUrl &&
+                        existing.catalogId == row.catalogId &&
+                        existing.type == row.type) {
+                        existing.items = std::move(row.items);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    auto it = std::lower_bound(m_homeCatalogs.begin(), m_homeCatalogs.end(), row,
+                        [](const CatalogRow& a, const CatalogRow& b) {
+                            return a.sortOrder < b.sortOrder;
+                        });
+                    m_homeCatalogs.insert(it, std::move(row));
+                }
+                prequeuePosters(m_homeCatalogs, 2);
+            },
+            [this]() {
+                return !m_loadingHome;
+            }
+        );
+
         {
             std::lock_guard<std::mutex> lock(m_homeMutex);
-            if (!catalogs.empty()) {
-                m_homeCatalogs = std::move(catalogs);
+            if (!m_homeCatalogs.empty()) {
                 saveHomeCache(HOME_CACHE, m_homeCatalogs);
                 prequeuePosters(m_homeCatalogs, 3);
             }
@@ -6317,7 +6345,7 @@ void App::handleDrag(int dx, int dy) {
             std::lock_guard<std::mutex> lock(m_homeMutex);
             localCatalogs = m_homeCatalogs;
         }
-        if (localCatalogs.empty() || m_loadingHome) return;
+        if (localCatalogs.empty()) return;
 
         // Vertical scroll (scroll rows)
         m_dragAccumY += dy;
@@ -6505,7 +6533,7 @@ void App::handleLongPress(int x, int y) {
             std::lock_guard<std::mutex> lock(m_homeMutex);
             localCatalogs = m_homeCatalogs;
         }
-        if (localCatalogs.empty() || m_loadingHome) return;
+        if (localCatalogs.empty()) return;
 
         int startY = 74;
         int visibleRows = 2;
