@@ -66,6 +66,7 @@ private:
 
     void loadHomeCatalogs(bool force = false);
     void cleanCatalogImageCache();
+    void refreshHome();
     void performSearch(const std::string& query);
     void sortSearchResults();
     void loadDetail(const std::string& type, const std::string& id);

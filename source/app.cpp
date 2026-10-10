@@ -727,12 +727,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
             m_screen = Screen::SETTINGS;
         }
         if (kDown & HidNpadButton_B) {
-            if (m_homeRowIndex != 0 || m_homeColIndex != 0) {
-                m_homeRowIndex = 0;
-                m_homeColIndex = 0;
-            } else {
-                loadHomeCatalogs();
-            }
+            refreshHome();
         }
         break;
     }
@@ -1122,6 +1117,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
 
         if (kDown & HidNpadButton_B) {
             m_screen = Screen::HOME;
+            refreshHome();
         }
         break;
     }
@@ -1558,9 +1554,8 @@ void App::handleTouch(int x, int y) {
         int navX = 280;
         if (y >= 10 && y <= 58) {
             if (x >= navX && x < navX + 100) {
-                // Home tab
-                m_homeRowIndex = 0;
-                m_homeColIndex = 0;
+                // Home tab - clean up and reload
+                refreshHome();
                 return;
             }
             if (x >= navX + 104 && x < navX + 214) {
@@ -1902,6 +1897,7 @@ void App::handleTouch(int x, int y) {
         if (y >= navY && y <= navY + 40) {
             if (x >= navX + 4 && x < navX + 104) {
                 m_screen = Screen::HOME;
+                refreshHome();
                 return;
             }
             if (x >= navX + 104 && x < navX + 218) {
@@ -1925,6 +1921,7 @@ void App::handleTouch(int x, int y) {
         }
         if (x >= SCREEN_W - 130 && x <= SCREEN_W - 40 && y >= 18 && y <= 50) {
             m_screen = Screen::HOME;
+            refreshHome();
             return;
         }
 
@@ -5499,7 +5496,34 @@ void App::cleanCatalogImageCache() {
         std::lock_guard<std::mutex> lock(m_downloadQueueMutex);
         m_downloadQueue.clear();
     }
+    m_lastCacheCalcTime = 0;
     printf("[App] Catalog image cache and home cache cleaned successfully.\n");
+}
+
+void App::refreshHome() {
+    printf("[App] Refreshing Home: cleaning caches and reloading catalogs...\n");
+    if (m_installThread.joinable()) {
+        m_installThread.join();
+    }
+    if (m_loadingHome) {
+        m_http.cancel();
+        if (m_homeLoadingThread.joinable()) {
+            m_homeLoadingThread.join();
+        }
+        m_http.reset();
+        m_loadingHome = false;
+    } else if (m_homeLoadingThread.joinable()) {
+        m_homeLoadingThread.join();
+    }
+
+    m_homeRowIndex = 0;
+    m_homeColIndex = 0;
+    cleanCatalogImageCache();
+    {
+        std::lock_guard<std::mutex> lock(m_homeMutex);
+        m_homeCatalogs.clear();
+    }
+    loadHomeCatalogs(true);
 }
 
 // ─── Data loading ────────────────────────────
