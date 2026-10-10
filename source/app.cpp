@@ -76,9 +76,7 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     {"MovieBox", "HTTP streams for movies and series.", "https://moviebox-cfa7.onrender.com/manifest.json"},
     {"Flix Streams", "HTTP streams from multiple web sources.", "https://flixnest.app/flix-streams/manifest.json"},
     {"KnightCrawler", "Alternative torrent and debrid stream search.", "https://knightcrawler.elfhosted.com/manifest.json"},
-    {"Debrid Search", "Search and stream files directly from your Debrid torrent cloud cache.", "https://debrid-search.strem.fun/manifest.json"},
     {"YouTube", "Watch YouTube content directly.", "https://youtube-v2.strem.fun/manifest.json"},
-    {"WatchHub", "Official streaming links (Netflix, Prime, etc.).", "https://watchhub.strem.io/manifest.json"},
 
     // --- Utility Addons ---
     {"OpenSubtitles v3", "Subtitles in 50+ languages.", "https://opensubtitles-v3.strem.io/manifest.json"}
@@ -214,8 +212,7 @@ bool App::init() {
             "https://yastream.tamthai.de/manifest.json",
             "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
             "https://indiastreams.rdata.in/manifest.json",
-            "https://opensubtitles-v3.strem.io/manifest.json",
-            "https://watchhub.strem.io/manifest.json"
+            "https://opensubtitles-v3.strem.io/manifest.json"
         };
         bool updatedAddons = false;
 
@@ -240,9 +237,11 @@ bool App::init() {
             bool isSwordWatch = (tUrl.find("sword-watch") != std::string::npos || aName.find("sword watch") != std::string::npos || aId.find("swordwatch") != std::string::npos);
             bool isNoDebrid = (tUrl.find("nodebrid") != std::string::npos || aName.find("nodebrid") != std::string::npos || aId.find("nodebrid") != std::string::npos);
             bool isStreamVix = (tUrl.find("streamvix") != std::string::npos || aName.find("streamvix") != std::string::npos || aId.find("streamvix") != std::string::npos);
+            bool isWatchHub = (tUrl.find("watchhub") != std::string::npos || aName.find("watchhub") != std::string::npos || aId.find("watchhub") != std::string::npos);
+            bool isDebridSearch = (tUrl.find("debrid-search") != std::string::npos || aName.find("debrid-search") != std::string::npos || aId.find("debrid-search") != std::string::npos || aName.find("debrid search") != std::string::npos);
 
             if (isPengu || isKitsu || isAio || isMediaFusion || isNebula || isMorpheus || isStreamAsia || isCyberflix ||
-                isComet || isSwordWatch || isNoDebrid || isStreamVix) {
+                isComet || isSwordWatch || isNoDebrid || isStreamVix || isWatchHub || isDebridSearch) {
                 printf("[App] Removing deprecated/offline addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
                 m_addonManager.removeAddon(a.transportUrl);
                 m_addonManager.removeAddon(a.manifest.id);
