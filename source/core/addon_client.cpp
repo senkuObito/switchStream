@@ -178,8 +178,13 @@ bool AddonClient::fetchCatalog(const AddonManifest& addon,
                                 const std::string& catalogId,
                                 int skip,
                                 CatalogResponse& out) {
-    std::string url = baseUrl(addon.transportUrl)
-        + "/catalog/" + type + "/" + catalogId;
+    std::string base = baseUrl(addon.transportUrl);
+    if (base.empty()) {
+        printf("[AddonClient] ERROR: fetchCatalog failed - empty transportUrl for addon '%s'\n", addon.id.c_str());
+        return false;
+    }
+
+    std::string url = base + "/catalog/" + type + "/" + catalogId;
     if (skip > 0) {
         url += "/skip=" + std::to_string(skip);
     }
@@ -221,7 +226,9 @@ bool AddonClient::searchCatalog(const AddonManifest& addon,
         else encoded += c;
     }
 
-    std::string url = baseUrl(addon.transportUrl)
+    std::string base = baseUrl(addon.transportUrl);
+    if (base.empty()) return false;
+    std::string url = base
         + "/catalog/" + type + "/" + catalogId
         + "/search=" + encoded + ".json";
 
@@ -249,7 +256,9 @@ bool AddonClient::fetchMeta(const AddonManifest& addon,
                              const std::string& type,
                              const std::string& id,
                              MetaResponse& out) {
-    std::string url = baseUrl(addon.transportUrl)
+    std::string base = baseUrl(addon.transportUrl);
+    if (base.empty()) return false;
+    std::string url = base
         + "/meta/" + type + "/" + id + ".json";
 
     auto resp = m_http.get(url, 6);
@@ -270,7 +279,9 @@ bool AddonClient::fetchStreams(const AddonManifest& addon,
                                const std::string& type,
                                const std::string& videoId,
                                StreamResponse& out) {
-    std::string url = baseUrl(addon.transportUrl)
+    std::string base = baseUrl(addon.transportUrl);
+    if (base.empty()) return false;
+    std::string url = base
         + "/stream/" + type + "/" + videoId + ".json";
 
     auto resp = m_http.get(url, 30); // streams: 30s timeout

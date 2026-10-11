@@ -203,14 +203,20 @@ bool App::init() {
     m_library.load(LIB_FILE);
 
     {
+        const std::string newYastreamUrl = "https://yastream-dev.tamthai.de/eyJjYXRhbG9ncyI6WyJraXNza2guc2VyaWVzLktvcmVhbiIsImtpc3NraC5tb3ZpZS5DaGluZXNlIiwia2lzc2toLm1vdmllLktvcmVhbiIsImtpc3NraC5zZXJpZXMuQ2hpbmVzZSIsImtpc3NraC5tb3ZpZS5VUyIsImtpc3NraC5zZXJpZXMuVVMiLCJraXNza2gubW92aWUuVGhhaSIsImtpc3NraC5zZXJpZXMuVGhhaSIsImtpc3NraC5tb3ZpZS5QaGlsaXBwaW5lIiwia2lzc2toLnNlcmllcy5QaGlsaXBwaW5lIiwia2lzc2toLnNlcmllcy5KYXBhbmVzZSIsImtpc3NraC5tb3ZpZS5Ib25na29uZyIsImtpc3NraC5zZXJpZXMuSG9uZ2tvbmciLCJraXNza2gubW92aWUuSmFwYW5lc2UiLCJraXNza2gubW92aWUuVGFpd2FuZXNlIiwia2lzc2toLnNlcmllcy5UYWl3YW5lc2UiLCJvbmV0b3VjaHR2LnNlcmllcy5Lb3JlYW4iLCJvbmV0b3VjaHR2LnNlcmllcy5Qb3B1bGFyIiwib25ldG91Y2h0di5zZXJpZXMuQ2hpbmVzZSIsIm9uZXRvdWNodHYuc2VyaWVzLlRoYWkiLCJraXNza2guc2VyaWVzLlNlYXJjaCIsImtpc3NraC5tb3ZpZS5TZWFyY2giLCJvbmV0b3VjaHR2LnNlcmllcy5TZWFyY2giLCJpZHJhbWEuc2VyaWVzLmlEcmFtYSIsImlkcmFtYS5zZXJpZXMuU2VhcmNoIl0sImNhdGFsb2ciOlsia2lzc2toIiwib25ldG91Y2h0diJdLCJzdHJlYW0iOlsia2lzc2toIiwib25ldG91Y2h0diIsIm1rdmRyYW1hIiwiaWRyYW1hIiwia2twaGltIiwib3BoaW0iXSwibnNmdyI6dHJ1ZSwiaW5mbyI6dHJ1ZSwicG9zdGVyIjoicnBkYiIsIm1mcFVybCI6IiIsInRiS2V5IjoiIiwibWZwUGFzcyI6IiJ9/manifest.json";
+        const std::string workingTmdbUrl = "https://61ab9c85a149-tmdb-collections.baby-beamup.club/%7B%7D/manifest.json";
+        const std::string workingYukiUrl = "https://stremio.yukistreams.xyz/p.HXHmDIcjXC6fRbCr/manifest.json";
+
         const std::vector<std::string> defaultAddons = {
             "https://v3-cinemeta.strem.io/manifest.json",
+            workingTmdbUrl,
             "https://torrentsdb.com/manifest.json",
             "https://torrentio.strem.fun/manifest.json",
             "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
             "https://dramayo.stream/manifest.json",
             "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json",
-            "https://yastream-dev.tamthai.de/eyJjYXRhbG9ncyI6W10sImNhdGFsb2ciOlsia2lzc2toIiwib25ldG91Y2h0diJdLCJzdHJlYW0iOlsia2lzc2toIiwib25ldG91Y2h0diIsIm1rdmRyYW1hIiwiaWRyYW1hIiwia2twaGltIiwib3BoaW0iXSwibnNmdyI6ZmFsc2UsImluZm8iOmZhbHNlLCJwb3N0ZXIiOiJ4cmRiIiwibWZwVXJsIjoiIiwidGJLZXkiOiIiLCJtZnBQYXNzIjoiIn0=/manifest.json",
+            newYastreamUrl,
+            workingYukiUrl,
             "https://83e20802dcf1-kdramacrush.baby-beamup.club/manifest.json",
             "https://indiastreams.rdata.in/manifest.json",
             "https://opensubtitles-v3.strem.io/manifest.json"
@@ -241,15 +247,28 @@ bool App::init() {
             bool isWatchHub = (tUrl.find("watchhub") != std::string::npos || aName.find("watchhub") != std::string::npos || aId.find("watchhub") != std::string::npos);
             bool isDebridSearch = (tUrl.find("debrid-search") != std::string::npos || aName.find("debrid-search") != std::string::npos || aId.find("debrid-search") != std::string::npos || aName.find("debrid search") != std::string::npos);
             bool isDeadStreamingCatalogs = (tUrl.find("streaming-catalogs.baby-beamup.club") != std::string::npos || aId.find("streaming_catalogs.baby_beamup") != std::string::npos);
-            bool isOldYastream = (tUrl.find("yastream.tamthai.de") != std::string::npos && tUrl.find("yastream-dev") == std::string::npos);
+            bool isMovieBox = (tUrl.find("moviebox") != std::string::npos || aName.find("moviebox") != std::string::npos || aId.find("moviebox") != std::string::npos);
+            bool isNagare = (tUrl.find("nagare") != std::string::npos || aName.find("nagare") != std::string::npos || aId.find("nagare") != std::string::npos);
+            bool isFlixStreams = (tUrl.find("flixnest") != std::string::npos || tUrl.find("flix-streams") != std::string::npos || aName.find("flix-stream") != std::string::npos || aId.find("flix") != std::string::npos);
+            bool isIndTorrents = (tUrl.find("indtorrents") != std::string::npos || aName.find("indtorrent") != std::string::npos || aId.find("indtorrent") != std::string::npos);
+            bool isOldYastream = (tUrl.find("yastream") != std::string::npos && a.transportUrl != newYastreamUrl);
+            bool isOldTmdb = (tUrl.find("tmdb-collections") != std::string::npos && a.transportUrl != workingTmdbUrl);
+            bool isOldYuki = (tUrl.find("yukistreams") != std::string::npos && a.transportUrl != workingYukiUrl);
 
             if (isPengu || isKitsu || isAio || isMediaFusion || isNebula || isMorpheus || isStreamAsia || isCyberflix ||
-                isComet || isSwordWatch || isNoDebrid || isStreamVix || isWatchHub || isDebridSearch || isDeadStreamingCatalogs || isOldYastream) {
-                printf("[App] Removing deprecated/offline addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
+                isComet || isSwordWatch || isNoDebrid || isStreamVix || isWatchHub || isDebridSearch || isDeadStreamingCatalogs ||
+                isMovieBox || isNagare || isFlixStreams || isIndTorrents || isOldYastream || isOldTmdb || isOldYuki) {
+                printf("[App] Removing deprecated/offline/unconfigured addon: %s (%s)\n", a.manifest.name.c_str(), a.transportUrl.c_str());
                 m_addonManager.removeAddon(a.transportUrl);
                 m_addonManager.removeAddon(a.manifest.id);
                 if (isOldYastream) {
-                    m_addonManager.installAddon("https://yastream-dev.tamthai.de/eyJjYXRhbG9ncyI6W10sImNhdGFsb2ciOlsia2lzc2toIiwib25ldG91Y2h0diJdLCJzdHJlYW0iOlsia2lzc2toIiwib25ldG91Y2h0diIsIm1rdmRyYW1hIiwiaWRyYW1hIiwia2twaGltIiwib3BoaW0iXSwibnNmdyI6ZmFsc2UsImluZm8iOmZhbHNlLCJwb3N0ZXIiOiJ4cmRiIiwibWZwVXJsIjoiIiwidGJLZXkiOiIiLCJtZnBQYXNzIjoiIn0=/manifest.json");
+                    m_addonManager.installAddon(newYastreamUrl);
+                }
+                if (isOldTmdb) {
+                    m_addonManager.installAddon(workingTmdbUrl);
+                }
+                if (isOldYuki) {
+                    m_addonManager.installAddon(workingYukiUrl);
                 }
                 updatedAddons = true;
             }

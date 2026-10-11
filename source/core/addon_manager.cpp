@@ -109,6 +109,7 @@ bool AddonManager::loadConfig(const std::string& configPath) {
 
             InstalledAddon addon;
             addon.transportUrl = url;
+            addon.manifest.transportUrl = url;
             addon.enabled = enabled;
             if (a.HasMember("name") && a["name"].IsString()) {
                 addon.manifest.name = a["name"].GetString();
@@ -427,6 +428,7 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
 
     InstalledAddon addon;
     addon.transportUrl = transportUrl;
+    addon.manifest.transportUrl = transportUrl;
     addon.enabled = true;
 
     if (!m_client.fetchManifest(transportUrl, addon.manifest)) {
@@ -439,6 +441,7 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
         if (addon.manifest.description.empty()) addon.manifest.description = getAddonFallbackDesc(transportUrl);
         if (addon.manifest.id.empty()) addon.manifest.id = getAddonFallbackId(transportUrl);
     }
+    addon.manifest.transportUrl = transportUrl;
 
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
@@ -448,6 +451,7 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
                 if (a.manifest.id == addon.manifest.id) {
                     a.transportUrl = transportUrl;
                     a.manifest     = addon.manifest;
+                    a.manifest.transportUrl = transportUrl;
                     sortAddons();
                     return true;
                 }
@@ -462,6 +466,7 @@ bool AddonManager::installAddon(const std::string& transportUrl) {
 void AddonManager::addAddon(const InstalledAddon& addon) {
     m_suppressStreamAddonWarning = false;
     InstalledAddon a = addon;
+    a.manifest.transportUrl = a.transportUrl;
     if (a.manifest.name.empty()) a.manifest.name = getAddonFallbackName(a.transportUrl);
     if (a.manifest.description.empty()) a.manifest.description = getAddonFallbackDesc(a.transportUrl);
     if (a.manifest.id.empty()) a.manifest.id = getAddonFallbackId(a.transportUrl);
@@ -507,12 +512,15 @@ void AddonManager::sortAddons() {
 }
 
 void AddonManager::ensureManifest(InstalledAddon& addon) {
+    if (addon.manifest.transportUrl.empty()) addon.manifest.transportUrl = addon.transportUrl;
     if (addon.manifest.resources.empty() && addon.manifest.catalogs.empty()) {
         if (m_client.fetchManifest(addon.transportUrl, addon.manifest)) {
+            addon.manifest.transportUrl = addon.transportUrl;
             std::lock_guard<std::mutex> lock(m_addonsMutex);
             for (auto& a : m_addons) {
                 if (a.transportUrl == addon.transportUrl) {
                     a.manifest = addon.manifest;
+                    a.manifest.transportUrl = addon.transportUrl;
                     break;
                 }
             }
@@ -521,6 +529,7 @@ void AddonManager::ensureManifest(InstalledAddon& addon) {
     if (addon.manifest.name.empty()) addon.manifest.name = getAddonFallbackName(addon.transportUrl);
     if (addon.manifest.description.empty()) addon.manifest.description = getAddonFallbackDesc(addon.transportUrl);
     if (addon.manifest.id.empty()) addon.manifest.id = getAddonFallbackId(addon.transportUrl);
+    if (addon.manifest.transportUrl.empty()) addon.manifest.transportUrl = addon.transportUrl;
 }
 
 bool AddonManager::addonHandles(const InstalledAddon& addon,
@@ -675,15 +684,18 @@ void AddonManager::getHomeCatalogsProgressive(
         // If still empty, fetch manifest quickly
         if (addon.manifest.catalogs.empty()) {
             if (m_client.fetchManifest(addon.transportUrl, addon.manifest)) {
+                addon.manifest.transportUrl = addon.transportUrl;
                 std::lock_guard<std::mutex> lock(m_addonsMutex);
                 for (auto& a : m_addons) {
                     if (a.transportUrl == addon.transportUrl) {
                         a.manifest = addon.manifest;
+                        a.manifest.transportUrl = addon.transportUrl;
                         break;
                     }
                 }
             }
         }
+        addon.manifest.transportUrl = addon.transportUrl;
 
         int count = 0;
         for (const auto& cat : addon.manifest.catalogs) {
@@ -720,8 +732,11 @@ void AddonManager::getHomeCatalogsProgressive(
         futures.push_back(std::async(std::launch::async, [this, job, onRowLoaded, shouldCancel]() {
             if (shouldCancel && shouldCancel()) return;
 
+            auto manifest = job.addon.manifest;
+            if (manifest.transportUrl.empty()) manifest.transportUrl = job.addon.transportUrl;
+
             CatalogResponse resp;
-            if (m_client.fetchCatalog(job.addon.manifest, job.cat.type, job.cat.id, 0, resp)) {
+            if (m_client.fetchCatalog(manifest, job.cat.type, job.cat.id, 0, resp)) {
                 if (shouldCancel && shouldCancel()) return;
                 if (!resp.metas.empty()) {
                     CatalogRow row;
@@ -1028,6 +1043,8 @@ std::string AddonManager::getAddonFallbackId(const std::string& url) {
     if (low.find("streamasia") != std::string::npos || low.find("dramacool") != std::string::npos) return "org.stremio.streamasia";
     if (low.find("animestream") != std::string::npos) return "org.stremio.animestream";
     if (low.find("opensubtitles") != std::string::npos) return "org.stremio.opensubtitlesv3";
+    if (low.find("tmdb-collections") != std::string::npos) return "org.stremio.tmdbcollections";
+    if (low.find("netflix-catalog") != std::string::npos) return "pw.ers.netflix-catalog";
     if (low.find("morpheus") != std::string::npos) return "community.morpheus";
     if (low.find("sword-watch") != std::string::npos) return "community.swordwatch";
     if (low.find("yukistreams") != std::string::npos) return "yukistreams.stremio.public";
@@ -1089,6 +1106,12 @@ std::vector<CatalogDef> AddonManager::getAddonFallbackCatalogs(const std::string
         cats.push_back({"series", "kdramacrush_catalog", "Asian Dramas", {"search", "genre", "skip"}, false});
     } else if (low.find("animestream") != std::string::npos) {
         cats.push_back({"anime", "animestream_catalog", "Anime", {"search", "genre", "skip"}, false});
+    } else if (low.find("tmdb-collections") != std::string::npos) {
+        cats.push_back({"collections", "ctmdb.popular", "Popular Collections", {"genre"}, false});
+        cats.push_back({"collections", "ctmdb.topRated", "Top Rated Collections", {"genre"}, false});
+    } else if (low.find("netflix-catalog") != std::string::npos) {
+        cats.push_back({"movie", "netflix-movies", "Netflix Movies", {"genre"}, false});
+        cats.push_back({"series", "netflix-series", "Netflix Series", {"genre"}, false});
     } else if (low.find("watchhub") != std::string::npos) {
         cats.push_back({"movie", "watchhub", "WatchHub", {"search", "genre", "skip"}, false});
     }
