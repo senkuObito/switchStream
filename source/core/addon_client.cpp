@@ -93,7 +93,7 @@ bool AddonClient::fetchManifest(const std::string& transportUrl, AddonManifest& 
         url += "manifest.json";
     }
 
-    auto resp = m_http.get(url, 5);
+    auto resp = m_http.get(url, 10);
     if (!resp.ok()) return false;
 
     Document doc;
@@ -190,7 +190,7 @@ bool AddonClient::fetchCatalog(const AddonManifest& addon,
     }
     url += ".json";
 
-    auto resp = m_http.get(url, 5);
+    auto resp = m_http.get(url, 12);
     if (!resp.ok()) return false;
 
     Document doc;
@@ -234,7 +234,7 @@ bool AddonClient::searchCatalog(const AddonManifest& addon,
 
     printf("[AddonClient] Searching URL: %s\n", url.c_str());
 
-    auto resp = m_http.get(url, 6);
+    auto resp = m_http.get(url, 10);
     if (!resp.ok()) return false;
 
     Document doc;
@@ -261,7 +261,7 @@ bool AddonClient::fetchMeta(const AddonManifest& addon,
     std::string url = base
         + "/meta/" + type + "/" + id + ".json";
 
-    auto resp = m_http.get(url, 6);
+    auto resp = m_http.get(url, 10);
     if (!resp.ok()) return false;
 
     Document doc;

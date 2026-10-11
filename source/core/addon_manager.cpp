@@ -642,6 +642,11 @@ void AddonManager::getHomeCatalogsProgressive(
     for (auto& addon : localAddons) {
         if (!addon.enabled) continue;
 
+        // If catalogs list is empty, fill from fallback first
+        if (addon.manifest.catalogs.empty()) {
+            addon.manifest.catalogs = getAddonFallbackCatalogs(addon.transportUrl);
+        }
+
         // Determine if this addon provides catalogs
         bool isCatalogProvider = false;
         for (const auto& res : addon.manifest.resources) {
@@ -666,6 +671,11 @@ void AddonManager::getHomeCatalogsProgressive(
                 low.find("kdramacrush") != std::string::npos ||
                 low.find("animestream") != std::string::npos ||
                 low.find("catalog") != std::string::npos ||
+                low.find("tmdb") != std::string::npos ||
+                low.find("collections") != std::string::npos ||
+                low.find("yukistream") != std::string::npos ||
+                low.find("indiastream") != std::string::npos ||
+                low.find("indian") != std::string::npos ||
                 low.find("watchhub") != std::string::npos) {
                 isCatalogProvider = true;
             }
@@ -674,11 +684,6 @@ void AddonManager::getHomeCatalogsProgressive(
         // Skip stream-only and subtitle-only addons completely!
         if (!isCatalogProvider) {
             continue;
-        }
-
-        // If catalogs list is empty, fill from fallback
-        if (addon.manifest.catalogs.empty()) {
-            addon.manifest.catalogs = getAddonFallbackCatalogs(addon.transportUrl);
         }
 
         // If still empty, fetch manifest quickly
@@ -723,42 +728,49 @@ void AddonManager::getHomeCatalogsProgressive(
         jobs[i].sortOrder = (int)i;
     }
 
-    // Launch all catalog requests concurrently
-    std::vector<std::future<void>> futures;
-    futures.reserve(jobs.size());
+    // Launch catalog requests using a bounded worker pool (4 concurrent workers)
+    // to avoid socket table exhaustion and DNS failures on Horizon OS.
+    std::atomic<size_t> jobIndex{0};
+    const size_t numWorkers = std::min<size_t>(4, jobs.size());
+    std::vector<std::thread> workers;
+    workers.reserve(numWorkers);
 
-    for (const auto& job : jobs) {
-        if (shouldCancel && shouldCancel()) break;
-        futures.push_back(std::async(std::launch::async, [this, job, onRowLoaded, shouldCancel]() {
-            if (shouldCancel && shouldCancel()) return;
-
-            auto manifest = job.addon.manifest;
-            if (manifest.transportUrl.empty()) manifest.transportUrl = job.addon.transportUrl;
-
-            CatalogResponse resp;
-            if (m_client.fetchCatalog(manifest, job.cat.type, job.cat.id, 0, resp)) {
+    for (size_t w = 0; w < numWorkers; ++w) {
+        workers.emplace_back([this, &jobs, &jobIndex, onRowLoaded, shouldCancel]() {
+            while (true) {
                 if (shouldCancel && shouldCancel()) return;
-                if (!resp.metas.empty()) {
-                    CatalogRow row;
-                    row.addonName = job.addon.manifest.name.empty() ?
-                        getAddonFallbackName(job.addon.transportUrl) : job.addon.manifest.name;
-                    row.catalogName = job.cat.name.empty() ? job.cat.id : job.cat.name;
-                    row.type = job.cat.type;
-                    row.catalogId = job.cat.id;
-                    row.transportUrl = job.addon.transportUrl;
-                    row.sortOrder = job.sortOrder;
-                    row.items = std::move(resp.metas);
-                    if (onRowLoaded) {
-                        onRowLoaded(std::move(row));
+                size_t idx = jobIndex.fetch_add(1);
+                if (idx >= jobs.size()) return;
+
+                const auto& job = jobs[idx];
+                auto manifest = job.addon.manifest;
+                if (manifest.transportUrl.empty()) manifest.transportUrl = job.addon.transportUrl;
+
+                CatalogResponse resp;
+                if (m_client.fetchCatalog(manifest, job.cat.type, job.cat.id, 0, resp)) {
+                    if (shouldCancel && shouldCancel()) return;
+                    if (!resp.metas.empty()) {
+                        CatalogRow row;
+                        row.addonName = job.addon.manifest.name.empty() ?
+                            getAddonFallbackName(job.addon.transportUrl) : job.addon.manifest.name;
+                        row.catalogName = job.cat.name.empty() ? job.cat.id : job.cat.name;
+                        row.type = job.cat.type;
+                        row.catalogId = job.cat.id;
+                        row.transportUrl = job.addon.transportUrl;
+                        row.sortOrder = job.sortOrder;
+                        row.items = std::move(resp.metas);
+                        if (onRowLoaded) {
+                            onRowLoaded(std::move(row));
+                        }
                     }
                 }
             }
-        }));
+        });
     }
 
-    // Wait for all to complete
-    for (auto& f : futures) {
-        f.wait();
+    // Wait for all workers to complete
+    for (auto& t : workers) {
+        if (t.joinable()) t.join();
     }
 }
 

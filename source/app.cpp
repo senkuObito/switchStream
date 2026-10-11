@@ -2876,7 +2876,21 @@ static StreamCardDisplay formatStreamCard(const Stream& s) {
             addonFromField = addonFromField.substr(1, addonFromField.size() - 2);
         }
         if (nameLines.size() > 1) {
-            qualityStr = nameLines[1];
+            std::string sub = nameLines[1];
+            std::string lowAddon = addonFromField;
+            for (char& c : lowAddon) c = (char)tolower((unsigned char)c);
+            if (lowAddon.find("yastream") != std::string::npos) {
+                if (sub == "kisskh") providerStr = "KissKH";
+                else if (sub == "onetouchtv") providerStr = "OneTouchTV";
+                else if (sub == "kkphim") providerStr = "KKPhim";
+                else if (sub == "ophim") providerStr = "OPhim";
+                else if (sub == "idrama") providerStr = "iDrama";
+                else if (sub == "mkvdrama") providerStr = "MKVDrama";
+                else providerStr = sub;
+                qualityStr.clear();
+            } else {
+                qualityStr = sub;
+            }
         } else {
             if (nameLines[0].find("1080p") != std::string::npos ||
                 nameLines[0].find("720p") != std::string::npos ||
@@ -5770,7 +5784,28 @@ void App::detailWorkerLoop() {
                 if (!resp.meta.videos.empty()) loadedMeta.videos = resp.meta.videos;
             }
 
-            if (!loadedMeta.videos.empty()) {
+            // A movie is NOT an episodic TV series, even if an addon (like YaStream)
+            // returns a dummy 1-element video array.
+            // Only true series and TMDB movie collections should show the episodic list!
+            bool isCollection = (id.rfind("ctmdb.", 0) == 0 || loadedMeta.type == "collections" || type == "collections");
+            bool isSeries = (loadedMeta.type == "series" || loadedMeta.type == "tv" || type == "series");
+            if (loadedMeta.type == "movie" && !isCollection) {
+                loadedMeta.videos.clear();
+            }
+
+            // Immediately display metadata for movies so details appear instantly
+            if (!isSeries && !isCollection) {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                if (m_detailGeneration.load() == currentGen) {
+                    m_detailMeta = loadedMeta;
+                    m_detailEpisodes.clear();
+                    m_detailSeasons.clear();
+                    m_detailFocus = DetailFocus::STREAMS;
+                    m_loadingDetail = false;
+                }
+            }
+
+            if ((isSeries || isCollection) && !loadedMeta.videos.empty()) {
                 std::vector<Video> sortedEps = loadedMeta.videos;
                 std::sort(sortedEps.begin(), sortedEps.end(), [](const Video& a, const Video& b) {
                     if (a.season != b.season) return a.season < b.season;
@@ -5923,6 +5958,9 @@ void App::detailWorkerLoop() {
                 if (m_detailGeneration.load() != currentGen) continue;
                 m_detailMeta = std::move(loadedMeta);
                 m_detailStreams = std::move(loadedStreams);
+                m_detailEpisodes.clear();
+                m_detailSeasons.clear();
+                m_detailFocus = DetailFocus::STREAMS;
                 m_loadingStreams = false;
                 m_loadingDetail = false;
             }

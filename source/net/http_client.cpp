@@ -50,7 +50,7 @@ HttpResponse HttpClient::get(const std::string& url, int timeout_s) {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)effective_timeout);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, (long)std::min(4, effective_timeout));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, (long)std::min(8, effective_timeout));
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT,
@@ -79,7 +79,7 @@ HttpResponse HttpClient::get(const std::string& url, int timeout_s) {
         fprintf(stderr, "[HttpClient] request aborted (shutdown)\n");
         response.statusCode = -1;
     } else {
-        fprintf(stderr, "[HttpClient] curl_easy_perform failed: %s\n", curl_easy_strerror(res));
+        fprintf(stderr, "[HttpClient] GET %s failed: %s\n", url.c_str(), curl_easy_strerror(res));
         response.statusCode = -1;
     }
 
