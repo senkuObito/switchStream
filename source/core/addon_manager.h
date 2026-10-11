@@ -117,6 +117,7 @@ public:
     static std::string getAddonFallbackName(const std::string& url);
     static std::string getAddonFallbackDesc(const std::string& url);
     static std::string getAddonFallbackId(const std::string& url);
+    static std::string getAddonFallbackLogo(const std::string& url);
     static std::string getAddonCategoryBadge(const InstalledAddon& addon);
     static std::vector<CatalogDef> getAddonFallbackCatalogs(const std::string& url);
 

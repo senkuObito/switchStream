@@ -134,6 +134,12 @@ bool AddonManager::loadConfig(const std::string& configPath) {
             if (addon.manifest.id.empty()) {
                 addon.manifest.id = getAddonFallbackId(url);
             }
+            if (a.HasMember("logo") && a["logo"].IsString()) {
+                addon.manifest.logo = a["logo"].GetString();
+            }
+            if (addon.manifest.logo.empty()) {
+                addon.manifest.logo = getAddonFallbackLogo(url);
+            }
 
             if (a.HasMember("types") && a["types"].IsArray()) {
                 for (auto& t : a["types"].GetArray()) {
@@ -280,6 +286,11 @@ bool AddonManager::saveConfig(const std::string& configPath) const {
         if (!addon.manifest.version.empty()) {
             writer.Key("version");
             writer.String(addon.manifest.version.c_str());
+        }
+        std::string logo = addon.manifest.logo.empty() ? getAddonFallbackLogo(addon.transportUrl) : addon.manifest.logo;
+        if (!logo.empty()) {
+            writer.Key("logo");
+            writer.String(logo.c_str());
         }
 
         // Save types
@@ -529,6 +540,7 @@ void AddonManager::ensureManifest(InstalledAddon& addon) {
     if (addon.manifest.name.empty()) addon.manifest.name = getAddonFallbackName(addon.transportUrl);
     if (addon.manifest.description.empty()) addon.manifest.description = getAddonFallbackDesc(addon.transportUrl);
     if (addon.manifest.id.empty()) addon.manifest.id = getAddonFallbackId(addon.transportUrl);
+    if (addon.manifest.logo.empty()) addon.manifest.logo = getAddonFallbackLogo(addon.transportUrl);
     if (addon.manifest.transportUrl.empty()) addon.manifest.transportUrl = addon.transportUrl;
 }
 
@@ -1069,6 +1081,22 @@ std::string AddonManager::getAddonFallbackId(const std::string& url) {
         if (!isalnum((unsigned char)c) && c != '.') c = '_';
     }
     return clean;
+}
+
+std::string AddonManager::getAddonFallbackLogo(const std::string& url) {
+    std::string low = url;
+    for (char& c : low) c = (char)tolower((unsigned char)c);
+
+    if (low.find("cinemeta") != std::string::npos) return "https://v3-cinemeta.strem.io/logo.png";
+    if (low.find("tmdb-collections") != std::string::npos) return "https://github.com/youchi1/tmdb-collections/raw/main/Images/logo.png";
+    if (low.find("torrentio") != std::string::npos) return "https://torrentio.strem.fun/images/logo.png";
+    if (low.find("torrentsdb") != std::string::npos) return "https://torrentsdb.com/logo.png";
+    if (low.find("opensubtitles") != std::string::npos) return "https://opensubtitles-v3.strem.io/logo.png";
+    if (low.find("indiastreams") != std::string::npos) return "https://indiastreams.rdata.in/logo.png";
+    if (low.find("filtorrent") != std::string::npos) return "https://ce8c71dcef3b-filtorrent.baby-beamup.club/logo.png";
+    if (low.find("kdramacrush") != std::string::npos) return "https://83e20802dcf1-kdramacrush.baby-beamup.club/logo.png";
+    if (low.find("netflix-catalog") != std::string::npos) return "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/logo.png";
+    return "";
 }
 
 std::string AddonManager::getAddonCategoryBadge(const InstalledAddon& addon) {

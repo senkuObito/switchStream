@@ -5588,7 +5588,7 @@ void App::refreshHome() {
 
     m_homeRowIndex = 0;
     m_homeColIndex = 0;
-    cleanCatalogImageCache();
+    unlink(HOME_CACHE);
     {
         std::lock_guard<std::mutex> lock(m_homeMutex);
         m_homeCatalogs.clear();
