@@ -18,6 +18,7 @@ ImageCache::~ImageCache() {
 }
 
 SDL_Texture* ImageCache::get(const std::string& url) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = m_cache.find(url);
     if (it == m_cache.end()) return nullptr;
 
@@ -30,6 +31,7 @@ SDL_Texture* ImageCache::get(const std::string& url) {
 }
 
 SDL_Texture* ImageCache::store(const std::string& url, const void* data, size_t dataSize) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     // If already cached, return existing
     if (has(url)) return get(url);
 
@@ -86,6 +88,7 @@ SDL_Texture* ImageCache::store(const std::string& url, const void* data, size_t 
 
 void ImageCache::addAlias(const std::string& aliasKey, const std::string& targetKey) {
     if (aliasKey.empty() || aliasKey == targetKey) return;
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = m_cache.find(targetKey);
     if (it == m_cache.end()) return;
 
@@ -102,16 +105,19 @@ void ImageCache::addAlias(const std::string& aliasKey, const std::string& target
 }
 
 bool ImageCache::has(const std::string& url) const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     return m_cache.find(url) != m_cache.end();
 }
 
 void ImageCache::clear() {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     m_cache.clear();
     m_lruOrder.clear();
     m_currentBytes = 0;
 }
 
 size_t ImageCache::memoryUsage() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     return m_currentBytes;
 }
 

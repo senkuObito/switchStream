@@ -47,6 +47,7 @@ public:
 
     // Audio & Subtitle & Volume Controls
     void changeVolume(double delta);
+    double getVolume() const;
     void cycleSubtitles();
     void cycleAudio();
 

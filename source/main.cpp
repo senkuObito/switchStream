@@ -137,6 +137,7 @@ int main(int argc, char* argv[]) {
     setvbuf(stdout, NULL, _IONBF, 0);
 
 #ifdef __SWITCH__
+    romfsInit();
     setenv("SSL_CERT_FILE", "romfs:/cacert.pem", 1);
 #else
     setenv("SSL_CERT_FILE", "romfs/cacert.pem", 1);
@@ -165,6 +166,7 @@ int main(int argc, char* argv[]) {
     if (appletGetAppletType() != AppletType_Application) {
         printf("[SwitchStream] Detected Applet Mode (Album)! Displaying Title Override required screen.\n");
         showAppletModeWarning();
+        romfsExit();
         plExit();
         socketExit();
         return 0;
@@ -195,6 +197,7 @@ int main(int argc, char* argv[]) {
     // Cleanup
     curl_global_cleanup();
 #ifdef __SWITCH__
+    romfsExit();
     plExit();
     socketExit();
 #endif

@@ -22,3 +22,12 @@ torrserver
 .idea/
 scratch/
 *.zip
+
+# Temporary scratch & data dumps
+addons.json
+addons_optimized.json
+home_cache.json
+library.json
+switch_addons*.json
+icon_*.jpg
+icon_*.png

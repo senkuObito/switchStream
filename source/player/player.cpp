@@ -67,6 +67,8 @@ bool Player::init(SDL_Window* window, SDL_Renderer* renderer, bool hwDecode) {
 #ifdef __SWITCH__
     mpv_set_option_string(m_mpv, "demuxer-lavf-o", "tls_verify=0,verify=0");
 #endif
+    mpv_set_option_string(m_mpv, "demuxer-lavf-probescore", "25");
+    mpv_set_option_string(m_mpv, "hls-bitrate", "max");
     mpv_set_option_string(m_mpv, "terminal", "yes");
     mpv_set_option_string(m_mpv, "msg-level", "all=v");
 
@@ -381,6 +383,10 @@ void Player::play(const std::string& url, const std::string& headers) {
     m_paused = isTorrent;
     m_cachedPaused.store(isTorrent);
 
+    // Set modern User-Agent for streaming CDNs
+    mpv_set_option_string(m_mpv, "user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+
     double defaultSpeed = 1.0;
     mpv_set_property(m_mpv, "speed", MPV_FORMAT_DOUBLE, &defaultSpeed);
 
@@ -487,6 +493,13 @@ void Player::changeVolume(double delta) {
     std::string volStr = "Volume: " + std::to_string((int)vol) + "%";
     const char* cmd[] = {"show-text", volStr.c_str(), nullptr};
     mpv_command(m_mpv, cmd);
+}
+
+double Player::getVolume() const {
+    if (!m_mpv) return 100.0;
+    double vol = 100.0;
+    mpv_get_property(m_mpv, "volume", MPV_FORMAT_DOUBLE, &vol);
+    return vol;
 }
 
 void Player::cycleSubtitles() {

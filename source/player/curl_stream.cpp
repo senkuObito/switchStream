@@ -91,7 +91,21 @@ size_t CurlStream::headerCallback(char* buffer, size_t size, size_t nitems, void
     if (line.size() >= 14) {
         std::string low = line;
         for (char& c : low) c = (char)tolower((unsigned char)c);
-        if (low.rfind("content-length:", 0) == 0) {
+        if (low.rfind("http/", 0) == 0) {
+            size_t sp = line.find(' ');
+            if (sp != std::string::npos) {
+                int code = atoi(line.c_str() + sp + 1);
+                if (code >= 400) {
+                    std::unique_lock<std::mutex> lock(self->m_mutex);
+                    self->m_error = true;
+                    self->m_bufferCount = 0;
+                    self->m_stop = true;
+                    self->m_cv_read.notify_all();
+                    printf("[CurlStream] HTTP error status %d for %s - aborting\n", code, self->m_url.c_str());
+                    return total;
+                }
+            }
+        } else if (low.rfind("content-length:", 0) == 0) {
             size_t col = line.find(':');
             if (col != std::string::npos) {
                 const char* val = line.c_str() + col + 1;
@@ -125,22 +139,31 @@ size_t CurlStream::headerCallback(char* buffer, size_t size, size_t nitems, void
 
 size_t CurlStream::writeCallback(char* ptr, size_t size, size_t nmemb, void* userdata) {
     CurlStream* self = static_cast<CurlStream*>(userdata);
+    if (!self) return 0;
+
+    {
+        std::unique_lock<std::mutex> lock(self->m_mutex);
+        if (self->m_stop || self->m_error) {
+            return 0; // Abort transfer immediately — never feed error HTML to player
+        }
+    }
+
     size_t totalBytes = size * nmemb;
     size_t bytesWritten = 0;
 
     while (bytesWritten < totalBytes) {
         std::unique_lock<std::mutex> lock(self->m_mutex);
         
-        if (self->m_stop) {
+        if (self->m_stop || self->m_error) {
             return 0; // abort transfer
         }
 
         // Wait while the buffer is full
-        while (self->m_bufferCount >= RING_BUFFER_SIZE && !self->m_stop) {
+        while (self->m_bufferCount >= RING_BUFFER_SIZE && !self->m_stop && !self->m_error) {
             self->m_cv_write.wait(lock);
         }
 
-        if (self->m_stop) {
+        if (self->m_stop || self->m_error) {
             return 0;
         }
 
@@ -278,13 +301,13 @@ int64_t CurlStream::read(char* buf, uint64_t nbytes) {
         m_cv_read.wait(lock);
     }
 
-    if (m_stop) {
+    if (m_stop || m_error) {
         return -1;
     }
 
     if (m_bufferCount == 0) {
-        if (m_error) return -1;
         if (m_eof) return 0; // EOF
+        return -1;
     }
 
     size_t toRead = std::min((size_t)nbytes, m_bufferCount);

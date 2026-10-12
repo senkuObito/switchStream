@@ -62,18 +62,19 @@ private:
     void drawNavBar();
 
     void handleInput();
-    void openSwkbd(std::string& output, const std::string& header = "");
+    void openSwkbd(std::string& output, const std::string& header = "", const std::string& initialText = "");
 
     void loadHomeCatalogs(bool force = false);
     void cleanCatalogImageCache();
     void refreshHome();
-    std::vector<CatalogRow> getHomeDisplayCatalogs();
+    const std::vector<CatalogRow>& getHomeDisplayCatalogs();
     void saveCurrentPlaybackProgress();
     void performSearch(const std::string& query);
     void sortSearchResults();
     void loadDetail(const std::string& type, const std::string& id);
     void playStream(const Stream& stream);
     void startTorrentPolling();
+    void drawTopNavBar();
 
     SDL_Window* m_window = nullptr;
     SDL_Renderer* m_renderer = nullptr;
@@ -81,6 +82,7 @@ private:
     TTF_Font* m_fontNormal = nullptr;
     TTF_Font* m_fontSmall = nullptr;
     TTF_Font* m_fontLarge = nullptr;
+    SDL_Texture* m_pillTexture = nullptr;
 
     HttpClient m_http;
     HttpClient m_imageHttp;
@@ -94,13 +96,19 @@ private:
     void handleTouch(int x, int y);
     void handleDrag(int dx, int dy);
     void handleLongPress(int x, int y);
+    void triggerSkipIndicator(double deltaSec);
 
     Screen m_screen = Screen::HOME;
     bool m_running = true;
 
     std::vector<CatalogRow> m_homeCatalogs;
+    std::vector<CatalogRow> m_cachedDisplayCatalogs;
+    bool m_homeDisplayDirty = true;
+    uint32_t m_lastLocalScanTime = 0;
+    std::vector<MetaItem> m_cachedLocalVideos;
     int m_homeRowIndex = 0;
     int m_homeColIndex = 0;
+    int m_homeFilterIndex = 0; // 0 = All, 1 = Movies (TMDB), 2 = TV Shows (TMDB), 3 = Live TV, 4 = Add-ons
 
     std::string m_searchQuery;
     enum class SearchSort { YEAR_DESC, DEFAULT };
@@ -121,6 +129,14 @@ private:
     std::vector<int>   m_detailSeasons;        // sorted unique season numbers
     int m_detailSeasonFilter = 0;              // index into m_detailSeasons (0 = first season)
     void loadEpisodeStreams(const std::string& epId);
+    void loadAdditionalStreams();
+    void filterStreamsToOriginAddon();
+    std::vector<MetaItem> scanLocalVideos();
+
+    std::string m_detailOriginAddonUrl;
+    std::string m_detailOriginAddonName;
+    bool m_detailFromStreamAndCatalogAddon = false;
+    bool m_detailShowAllAddons = false;
 
 
     int m_libraryIndex = 0;
@@ -181,9 +197,13 @@ private:
     std::mutex m_workerMutex;
     std::condition_variable m_workerCv;
     bool m_workerRunning = false;
-    int m_workerTask = 0; // 0=none, 1=meta+streams, 2=episode_streams
+    int m_workerTask = 0; // 0=none, 1=meta+streams, 2=episode_streams, 3=additional_streams
     std::string m_workerType;
     std::string m_workerId;
+    std::string m_workerMetaName;
+    std::string m_workerExclude;
+    int m_workerSeason = 1;
+    int m_workerEpisode = 1;
     int m_workerGen = 0;
     std::thread m_installThread;
     uint32_t m_osdShowTime = 0;
@@ -204,10 +224,24 @@ private:
     int m_lastTapX = 0;
     int m_lastTapY = 0;
 
+    // Touch & Gesture tracking
+    int m_touchStartX = 0;
+    int m_touchStartY = 0;
+    int m_playerTouchGesture = 0; // 0 = none, 1 = brightness, 2 = volume, 3 = scrub
+
     // Scrubbing state
     bool m_isScrubbing = false;
     double m_scrubStartPos = 0.0;
     double m_scrubCurrentPos = 0.0;
+
+    // Skip indicator HUD state
+    double m_skipDelta = 0.0;
+    uint32_t m_skipShowTime = 0;
+
+    // Brightness & Volume HUD state
+    float m_brightness = 1.0f;
+    uint32_t m_brightnessShowTime = 0;
+    uint32_t m_volumeShowTime = 0;
 
     // Resume playback state
     bool m_needsResume = false;

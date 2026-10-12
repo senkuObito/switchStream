@@ -12,6 +12,7 @@
 #include <sstream>
 #include <fstream>
 #include <regex>
+#include <unordered_set>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
@@ -27,22 +28,23 @@
 #endif
 #include "torrent/torrent.h"
 #include "torrent/torrent_stream.h"
+#include "pill_asset.h"
 
 // Switch screen: 1280x720
 static constexpr int SCREEN_W = 1280;
 static constexpr int SCREEN_H = 720;
 
-// Color palette — modern dark slate theme
-static constexpr SDL_Color BG_COLOR       = {14,  17,  24,  255}; // deep midnight navy (#0e1118)
-static constexpr SDL_Color CARD_COLOR     = {22,  27,  38,  255}; // modern dark card (#161b26)
-static constexpr SDL_Color CARD_HL        = {32,  40,  56,  255}; // dark highlight
-static constexpr SDL_Color ACCENT         = {0,   229, 255, 255}; // vibrant electric cyan (#00e5ff)
-static constexpr SDL_Color ACCENT_MUTED   = {0,   160, 190, 255}; // muted cyan
-static constexpr SDL_Color TEXT_PRIMARY    = {245, 248, 255, 255}; // crisp bright white
-static constexpr SDL_Color TEXT_SECONDARY  = {145, 158, 180, 255}; // soft slate gray
-static constexpr SDL_Color NAV_BG         = {14,  17,  24,  255};
-static constexpr SDL_Color NAV_CONTAINER  = {22,  27,  39,  240}; // pill container (#161b27)
-static constexpr SDL_Color NAV_BORDER     = {42,  50,  72,  180}; // pill border (#2a3248)
+// Color palette — True Black OLED theme with Clean White Minimalist Accent
+static constexpr SDL_Color BG_COLOR       = {0,   0,   0,   255}; // True OLED Black (#000000)
+static constexpr SDL_Color CARD_COLOR     = {14,  14,  16,  255}; // Deep dark card (#0e0e10)
+static constexpr SDL_Color CARD_HL        = {28,  28,  34,  255}; // Dark highlight
+static constexpr SDL_Color ACCENT         = {255, 255, 255, 255}; // Pure clean White (#ffffff)
+static constexpr SDL_Color ACCENT_MUTED   = {200, 200, 205, 255}; // Muted white/silver
+static constexpr SDL_Color TEXT_PRIMARY    = {255, 255, 255, 255}; // Crisp bright white
+static constexpr SDL_Color TEXT_SECONDARY  = {150, 150, 155, 255}; // Soft neutral gray
+static constexpr SDL_Color NAV_BG         = {0,   0,   0,   255}; // True OLED Black (#000000)
+static constexpr SDL_Color NAV_CONTAINER  = {14,  14,  18,  245}; // Dark container
+static constexpr SDL_Color NAV_BORDER     = {40,  40,  46,  180}; // Border
 
 // Poster dimensions
 static constexpr int POSTER_W = 150;
@@ -65,10 +67,12 @@ static const std::vector<DiscoverAddon> DISCOVER_ADDONS = {
     {"Dramayo", "Asian dramas, anime, series and movies catalog & streaming access.", "https://dramayo.stream/manifest.json"},
     {"IndiaStreams", "Trending movies and shows from Indian platforms (Tamil, Hindi, Telugu).", "https://indiastreams.rdata.in/manifest.json"},
     {"Indian Regional Catalog", "Indian regional movies catalog by language (Tamil, Telugu, Hindi, Malayalam).", "https://83e20802dcf1-indian-streams.baby-beamup.club/manifest.json"},
+    {"Indian Live TV", "Watch 250+ Indian Live TV channels from Zee5, SonyLIV, and MX Player.", "https://stremio-indian-livetv-1-nsw.vercel.app/manifest.json"},
     {"TMDB Collections", "Movie collections and sagas grouped by franchise.", "https://61ab9c85a149-tmdb-collections.baby-beamup.club/manifest.json"},
     {"AnimeStream", "Anime streaming catalog and metadata provider.", "https://animestream-addon.keypop3750.workers.dev/manifest.json"},
 
     // --- Stream Scrapers & Providers (provide playable stream links) ---
+    {"WebStreamrMBG", "HTTP streams for movies & series from web providers (VidSrc, MovieBox, etc.).", "https://87d6a6ef6b58-webstreamrmbg.baby-beamup.club/manifest.json"},
     {"TorrentsDB", "Multi-tracker torrent search supporting Indian (1TamilMV, TamilBlasters) & global sources.", "https://torrentsdb.com/manifest.json"},
     {"Torrentio", "Torrent streams from YTS, RARBG, 1337x, ThePirateBay, KickassTorrents, etc.", "https://torrentio.strem.fun/manifest.json"},
     {"Filtorrent", "Curated & shaped Torrentio + TorrentsDB streams with resolution filtering.", "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json"},
@@ -127,6 +131,12 @@ bool App::init() {
     mkdir("sdmc:/switch", 0777);
     mkdir("sdmc:/switch/switchstream", 0777);
     mkdir("sdmc:/switch/switchstream/imgcache", 0777);
+    if (R_SUCCEEDED(lblInitialize())) {
+        float currentBrt = 1.0f;
+        if (R_SUCCEEDED(lblGetCurrentBrightnessSetting(&currentBrt))) {
+            m_brightness = std::clamp(currentBrt, 0.05f, 1.0f);
+        }
+    }
 #else
     system("mkdir -p ./switchstream_data/imgcache");
 #endif
@@ -198,22 +208,43 @@ bool App::init() {
     // Image cache — 128MB max (lightweight, fits 250+ posters smoothly)
     m_imageCache = new ImageCache(m_renderer, 128);
 
+    // Load custom loading pill asset (RomFS with embedded memory fallback)
+    m_pillTexture = IMG_LoadTexture(m_renderer, "romfs:/assets/pill.png");
+    if (!m_pillTexture) {
+        m_pillTexture = IMG_LoadTexture(m_renderer, "romfs/assets/pill.png");
+    }
+    if (!m_pillTexture) {
+        m_pillTexture = IMG_LoadTexture(m_renderer, "./romfs/assets/pill.png");
+    }
+    if (!m_pillTexture) {
+        SDL_RWops* rw = SDL_RWFromConstMem(kPillPngData, (int)kPillPngSize);
+        if (rw) {
+            m_pillTexture = IMG_LoadTexture_RW(m_renderer, rw, 1);
+        }
+    }
+    if (m_pillTexture) {
+        SDL_SetTextureBlendMode(m_pillTexture, SDL_BLENDMODE_BLEND);
+    }
+
     // Load saved data
     m_addonManager.loadConfig(CONFIG_FILE);
     m_library.load(LIB_FILE);
 
     {
         const std::string newYastreamUrl = "https://yastream-dev.tamthai.de/eyJjYXRhbG9ncyI6WyJraXNza2guc2VyaWVzLktvcmVhbiIsImtpc3NraC5tb3ZpZS5DaGluZXNlIiwia2lzc2toLm1vdmllLktvcmVhbiIsImtpc3NraC5zZXJpZXMuQ2hpbmVzZSIsImtpc3NraC5tb3ZpZS5VUyIsImtpc3NraC5zZXJpZXMuVVMiLCJraXNza2gubW92aWUuVGhhaSIsImtpc3NraC5zZXJpZXMuVGhhaSIsImtpc3NraC5tb3ZpZS5QaGlsaXBwaW5lIiwia2lzc2toLnNlcmllcy5QaGlsaXBwaW5lIiwia2lzc2toLnNlcmllcy5KYXBhbmVzZSIsImtpc3NraC5tb3ZpZS5Ib25na29uZyIsImtpc3NraC5zZXJpZXMuSG9uZ2tvbmciLCJraXNza2gubW92aWUuSmFwYW5lc2UiLCJraXNza2gubW92aWUuVGFpd2FuZXNlIiwia2lzc2toLnNlcmllcy5UYWl3YW5lc2UiLCJvbmV0b3VjaHR2LnNlcmllcy5Lb3JlYW4iLCJvbmV0b3VjaHR2LnNlcmllcy5Qb3B1bGFyIiwib25ldG91Y2h0di5zZXJpZXMuQ2hpbmVzZSIsIm9uZXRvdWNodHYuc2VyaWVzLlRoYWkiLCJraXNza2guc2VyaWVzLlNlYXJjaCIsImtpc3NraC5tb3ZpZS5TZWFyY2giLCJvbmV0b3VjaHR2LnNlcmllcy5TZWFyY2giLCJpZHJhbWEuc2VyaWVzLmlEcmFtYSIsImlkcmFtYS5zZXJpZXMuU2VhcmNoIl0sImNhdGFsb2ciOlsia2lzc2toIiwib25ldG91Y2h0diJdLCJzdHJlYW0iOlsia2lzc2toIiwib25ldG91Y2h0diIsIm1rdmRyYW1hIiwiaWRyYW1hIiwia2twaGltIiwib3BoaW0iXSwibnNmdyI6dHJ1ZSwiaW5mbyI6dHJ1ZSwicG9zdGVyIjoicnBkYiIsIm1mcFVybCI6IiIsInRiS2V5IjoiIiwibWZwUGFzcyI6IiJ9/manifest.json";
+        const std::string realTmdbUrl = "https://94c8cb9f702d-tmdb-addon.baby-beamup.club/manifest.json";
         const std::string workingTmdbUrl = "https://61ab9c85a149-tmdb-collections.baby-beamup.club/%7B%7D/manifest.json";
         const std::string workingYukiUrl = "https://stremio.yukistreams.xyz/p.HXHmDIcjXC6fRbCr/manifest.json";
 
         const std::vector<std::string> defaultAddons = {
             "https://v3-cinemeta.strem.io/manifest.json",
+            realTmdbUrl,
             workingTmdbUrl,
             "https://torrentsdb.com/manifest.json",
             "https://torrentio.strem.fun/manifest.json",
             "https://ce8c71dcef3b-filtorrent.baby-beamup.club/manifest.json",
             "https://dramayo.stream/manifest.json",
+            "https://87d6a6ef6b58-webstreamrmbg.baby-beamup.club/manifest.json",
             "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json",
             newYastreamUrl,
             workingYukiUrl,
@@ -308,6 +339,28 @@ bool App::init() {
                 updatedAddons = true;
             }
         }
+
+        bool foundLocal = false;
+        for (const auto& a : currentAddons) {
+            if (a.transportUrl == "local://media" || a.manifest.id == "local-media" || a.manifest.id == "local") {
+                foundLocal = true;
+                break;
+            }
+        }
+        if (!foundLocal) {
+            printf("Registering missing default addon: Local Media\n");
+            InstalledAddon a;
+            a.transportUrl = "local://media";
+            a.enabled = true;
+            a.manifest.id = "local-media";
+            a.manifest.name = "Local Media";
+            a.manifest.description = "Built-in local media player for videos stored in /switch/switchstream/videos.";
+            a.manifest.version = "1.0.0";
+            a.manifest.types = {"movie", "series"};
+            m_addonManager.addAddon(a);
+            updatedAddons = true;
+        }
+
         if (updatedAddons) {
             m_addonManager.saveConfig(CONFIG_FILE);
         }
@@ -463,6 +516,9 @@ void App::run() {
                 // Touch down
                 startTouchX = touchX;
                 startTouchY = touchY;
+                m_touchStartX = touchX;
+                m_touchStartY = touchY;
+                m_playerTouchGesture = 0;
                 lastTouchX = touchX;
                 lastTouchY = touchY;
                 touchStartTime = SDL_GetTicks();
@@ -501,14 +557,19 @@ void App::run() {
                 printf("[Touch] Up: start_x=%d, start_y=%d (dragging=%d, longpressed=%d)\n",
                        startTouchX, startTouchY, touchDragging, touchLongPressed);
                 if (m_screen == Screen::PLAYER && m_isScrubbing) {
+                    double delta = m_scrubCurrentPos - m_scrubStartPos;
                     m_player.seekAbsolute(m_scrubCurrentPos);
                     m_isScrubbing = false;
                     m_dragAccumX = 0;
                     m_dragAccumY = 0;
-                    printf("[Touch] Scrub finished. Seek to %.2f\n", m_scrubCurrentPos);
+                    printf("[Touch] Scrub finished. Seek to %.2f (delta=%.1fs)\n", m_scrubCurrentPos, delta);
+                    if (std::abs(delta) >= 1.0) {
+                        triggerSkipIndicator(delta);
+                    }
                 } else if (!touchDragging && !touchLongPressed) {
                     handleTouch(startTouchX, startTouchY);
                 }
+                m_playerTouchGesture = 0;
             }
             wasTouched = false;
         }
@@ -526,6 +587,9 @@ void App::run() {
                 m_mouseDown = true;
                 m_startMouseX = event.button.x;
                 m_startMouseY = event.button.y;
+                m_touchStartX = event.button.x;
+                m_touchStartY = event.button.y;
+                m_playerTouchGesture = 0;
                 m_lastMouseX = event.button.x;
                 m_lastMouseY = event.button.y;
                 m_mouseStartTime = SDL_GetTicks();
@@ -562,14 +626,19 @@ void App::run() {
                     printf("[Mouse] Up: start_x=%d, start_y=%d (dragging=%d, longpressed=%d)\n",
                            m_startMouseX, m_startMouseY, m_mouseDragging, m_mouseLongPressed);
                     if (m_screen == Screen::PLAYER && m_isScrubbing) {
+                        double delta = m_scrubCurrentPos - m_scrubStartPos;
                         m_player.seekAbsolute(m_scrubCurrentPos);
                         m_isScrubbing = false;
                         m_dragAccumX = 0;
                         m_dragAccumY = 0;
-                        printf("[Mouse] Scrub finished. Seek to %.2f\n", m_scrubCurrentPos);
+                        printf("[Mouse] Scrub finished. Seek to %.2f (delta=%.1fs)\n", m_scrubCurrentPos, delta);
+                        if (std::abs(delta) >= 1.0) {
+                            triggerSkipIndicator(delta);
+                        }
                     } else if (!m_mouseDragging && !m_mouseLongPressed) {
                         handleTouch(m_startMouseX, m_startMouseY);
                     }
+                    m_playerTouchGesture = 0;
                     m_mouseDown = false;
                 }
             }
@@ -721,17 +790,46 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
             break;
         }
 
-        std::vector<CatalogRow> localCatalogs = getHomeDisplayCatalogs();
+        bool hasTmdb = m_addonManager.hasTmdbAddon();
+        if (kDown & HidNpadButton_ZL) {
+            if (hasTmdb) {
+                m_homeFilterIndex = (m_homeFilterIndex + 4) % 5;
+            } else {
+                if (m_homeFilterIndex == 0) m_homeFilterIndex = 4;
+                else if (m_homeFilterIndex == 4) m_homeFilterIndex = 3;
+                else m_homeFilterIndex = 0;
+            }
+            m_homeRowIndex = 0;
+            m_homeColIndex = 0;
+            m_homeDisplayDirty = true;
+            break;
+        }
+        if (kDown & HidNpadButton_ZR) {
+            if (hasTmdb) {
+                m_homeFilterIndex = (m_homeFilterIndex + 1) % 5;
+            } else {
+                if (m_homeFilterIndex == 0) m_homeFilterIndex = 3;
+                else if (m_homeFilterIndex == 3) m_homeFilterIndex = 4;
+                else m_homeFilterIndex = 0;
+            }
+            m_homeRowIndex = 0;
+            m_homeColIndex = 0;
+            m_homeDisplayDirty = true;
+            break;
+        }
+
+        const auto& localCatalogs = getHomeDisplayCatalogs();
 
         if (kDown & HidNpadButton_Down) {
             m_homeRowIndex++;
             if (m_homeRowIndex >= (int)localCatalogs.size())
-                m_homeRowIndex = (int)localCatalogs.size() - 1;
+                m_homeRowIndex = localCatalogs.empty() ? 0 : (int)localCatalogs.size() - 1;
             m_homeColIndex = 0;
         }
         if (kDown & HidNpadButton_Up) {
-            m_homeRowIndex--;
-            if (m_homeRowIndex < 0) m_homeRowIndex = 0;
+            if (m_homeRowIndex > 0) {
+                m_homeRowIndex--;
+            }
         }
         if (kDown & HidNpadButton_Right) {
             m_homeColIndex++;
@@ -748,8 +846,38 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
             // Open detail for selected item
             if (m_homeRowIndex < (int)localCatalogs.size() &&
                 m_homeColIndex < (int)localCatalogs[m_homeRowIndex].items.size()) {
-                auto& item = localCatalogs[m_homeRowIndex].items[m_homeColIndex];
+                auto& row = localCatalogs[m_homeRowIndex];
+                auto& item = row.items[m_homeColIndex];
                 m_detailMeta = item;
+
+                std::string originUrl = row.transportUrl;
+                std::string originName = row.addonName;
+
+                if (row.addonName == "SwitchStream" || row.catalogName == "Continue Watching") {
+                    if (item.id.rfind("kisskh:", 0) == 0 || item.id.rfind("onetouchtv:", 0) == 0 ||
+                        item.id.rfind("idrama:", 0) == 0 || item.id.rfind("mkvdrama:", 0) == 0 ||
+                        item.id.rfind("kkphim:", 0) == 0 || item.id.rfind("ophim:", 0) == 0) {
+                        originName = "yastream";
+                    }
+                }
+                if (item.id.rfind("zee5:", 0) == 0 || item.id.rfind("sliv:", 0) == 0 || item.id.rfind("mx:", 0) == 0) {
+                    originName = "Indian Live TV";
+                }
+
+                bool isStandardId = (item.id.rfind("tt", 0) == 0 || item.id.rfind("tmdb:", 0) == 0);
+                if (!isStandardId && (m_addonManager.isStreamAndCatalogAddon(originUrl) ||
+                                      m_addonManager.isStreamAndCatalogAddon(originName))) {
+                    m_detailOriginAddonUrl = originUrl;
+                    m_detailOriginAddonName = originName;
+                    m_detailFromStreamAndCatalogAddon = true;
+                    m_detailShowAllAddons = false;
+                } else {
+                    m_detailOriginAddonUrl = "";
+                    m_detailOriginAddonName = "";
+                    m_detailFromStreamAndCatalogAddon = false;
+                    m_detailShowAllAddons = true;
+                }
+
                 loadDetail(item.type, item.id);
                 m_screen = Screen::DETAIL;
             }
@@ -774,7 +902,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
             m_screen = Screen::SETTINGS;
         }
         if (kDown & HidNpadButton_B) {
-            refreshHome();
+            m_running = false;
         }
         break;
     }
@@ -792,6 +920,21 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
         if (kDown & HidNpadButton_A && !m_searchResults.empty()) {
             auto& item = m_searchResults[m_searchIndex];
             m_detailMeta = item;
+
+            std::string originName = item.addonName;
+            bool isStandardId = (item.id.rfind("tt", 0) == 0 || item.id.rfind("tmdb:", 0) == 0);
+            if (!isStandardId && m_addonManager.isStreamAndCatalogAddon(originName)) {
+                m_detailOriginAddonUrl = "";
+                m_detailOriginAddonName = originName;
+                m_detailFromStreamAndCatalogAddon = true;
+                m_detailShowAllAddons = false;
+            } else {
+                m_detailOriginAddonUrl = "";
+                m_detailOriginAddonName = "";
+                m_detailFromStreamAndCatalogAddon = false;
+                m_detailShowAllAddons = true;
+            }
+
             loadDetail(item.type, item.id);
             m_screen = Screen::DETAIL;
         }
@@ -958,6 +1101,17 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
                 }
             }
 
+            if (kDown & HidNpadButton_Y) {
+                if (m_detailFromStreamAndCatalogAddon) {
+                    m_detailShowAllAddons = !m_detailShowAllAddons;
+                    if (m_detailShowAllAddons) {
+                        loadAdditionalStreams();
+                    } else {
+                        filterStreamsToOriginAddon();
+                    }
+                }
+            }
+
             if (kDown & HidNpadButton_X) {
                 m_library.toggleBookmark(m_detailMeta.id, m_detailMeta.type,
                                           m_detailMeta.name, m_detailMeta.poster);
@@ -966,12 +1120,28 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
         }
         break;
 
-    case Screen::LIBRARY:
+    case Screen::LIBRARY: {
+        auto items = m_library.getRecentlyWatched(20);
         if (kDown & HidNpadButton_Down) m_libraryIndex++;
         if (kDown & HidNpadButton_Up) m_libraryIndex--;
         if (m_libraryIndex < 0) m_libraryIndex = 0;
+        if (!items.empty() && m_libraryIndex >= (int)items.size()) m_libraryIndex = (int)items.size() - 1;
+        if (kDown & HidNpadButton_A && !items.empty() && m_libraryIndex < (int)items.size()) {
+            m_detailOriginAddonUrl = "";
+            m_detailOriginAddonName = "";
+            m_detailFromStreamAndCatalogAddon = false;
+            m_detailShowAllAddons = true;
+            m_detailMeta = MetaItem();
+            m_detailMeta.id = items[m_libraryIndex].id;
+            m_detailMeta.type = items[m_libraryIndex].type;
+            m_detailMeta.name = items[m_libraryIndex].name;
+            m_detailMeta.poster = items[m_libraryIndex].poster;
+            loadDetail(items[m_libraryIndex].type, items[m_libraryIndex].id);
+            m_screen = Screen::DETAIL;
+        }
         if (kDown & HidNpadButton_B) m_screen = Screen::HOME;
         break;
+    }
 
     case Screen::ADDONS: {
         if (m_loading) break; // Ignore inputs while action is processing
@@ -1040,20 +1210,22 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
                     if (m_addonIndex >= 0 && m_addonIndex < installedCount) {
                         std::string addonId = addons[m_addonIndex].manifest.id;
                         std::string addonUrl = addons[m_addonIndex].transportUrl;
-                        m_loading = true;
-                        m_addonActionText = "Removing addon & updating catalogs...";
-                        if (m_installThread.joinable()) {
-                            m_installThread.join();
+                        if (addonId != "local-media" && addonId != "local" && addonUrl != "local://media") {
+                            m_loading = true;
+                            m_addonActionText = "Removing addon & updating catalogs...";
+                            if (m_installThread.joinable()) {
+                                m_installThread.join();
+                            }
+                            m_installThread = std::thread([this, addonId, addonUrl]() {
+                                m_addonManager.removeAddon(addonId);
+                                m_addonManager.removeAddon(addonUrl);
+                                m_addonManager.saveConfig(CONFIG_FILE);
+                                if (m_addonIndex > 0) m_addonIndex--;
+                                loadHomeCatalogs(true);
+                                m_loading = false;
+                                m_addonActionText = "";
+                            });
                         }
-                        m_installThread = std::thread([this, addonId, addonUrl]() {
-                            m_addonManager.removeAddon(addonId);
-                            m_addonManager.removeAddon(addonUrl);
-                            m_addonManager.saveConfig(CONFIG_FILE);
-                            if (m_addonIndex > 0) m_addonIndex--;
-                            loadHomeCatalogs(true);
-                            m_loading = false;
-                            m_addonActionText = "";
-                        });
                     }
                 }
             }
@@ -1356,29 +1528,33 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
                 m_player.setSpeed(1.0);
                 printf("[Player] 2X Speed disengaged -> restored 1.0X\n");
             } else if (m_rButtonDownTime > 0 && (now - m_rButtonDownTime < 300)) {
-                // Short click: skip 5s forward (no OSD)
+                // Short click: skip 5s forward (show skip indicator)
                 m_player.seek(5.0);
-                printf("[Player] R clicked -> seek +5s (no OSD)\n");
+                triggerSkipIndicator(5.0);
+                printf("[Player] R clicked -> seek +5s\n");
             }
             m_rButtonDownTime = 0;
         }
 
-        // 5. L button: skip 5s to prev (no OSD)
+        // 5. L button: skip 5s to prev
         if (kDown & HidNpadButton_L) {
             m_player.seek(-5.0);
-            printf("[Player] L clicked -> seek -5s (no OSD)\n");
+            triggerSkipIndicator(-5.0);
+            printf("[Player] L clicked -> seek -5s\n");
         }
 
-        // 6. D-Pad Left: skip 5s to prev (no OSD)
+        // 6. D-Pad Left: skip 5s to prev
         if (kDown & HidNpadButton_Left) {
             m_player.seek(-5.0);
-            printf("[Player] Left clicked -> seek -5s (no OSD)\n");
+            triggerSkipIndicator(-5.0);
+            printf("[Player] Left clicked -> seek -5s\n");
         }
 
-        // 7. D-Pad Right: skip 5s to right (no OSD)
+        // 7. D-Pad Right: skip 5s to right
         if (kDown & HidNpadButton_Right) {
             m_player.seek(5.0);
-            printf("[Player] Right clicked -> seek +5s (no OSD)\n");
+            triggerSkipIndicator(5.0);
+            printf("[Player] Right clicked -> seek +5s\n");
         }
 
         // 8. A button: toggle play/pause (no OSD)
@@ -1397,9 +1573,11 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
         // 10. Volume controls
         if (kDown & HidNpadButton_Up) {
             m_player.changeVolume(5.0);
+            m_volumeShowTime = now;
         }
         else if (kDown & HidNpadButton_Down) {
             m_player.changeVolume(-5.0);
+            m_volumeShowTime = now;
         }
 
         // 11. Overlays (Y for Subtitles, X for Audio tracks)
@@ -1555,6 +1733,7 @@ void App::handleInputForPad(u64 kDown, u64 kHeld, u64 kUp) {
                 m_screen = Screen::HOME;
             }
         }
+        if (kDown & HidNpadButton_B) m_screen = Screen::HOME;
         break;
     }
 
@@ -1599,14 +1778,14 @@ void App::handleTouch(int x, int y) {
         }
 
         // ─── Header Navigation Click ───
-        int navX = 280;
+        int navX = 220;
         if (y >= 10 && y <= 58) {
-            if (x >= navX && x < navX + 100) {
+            if (x >= navX + 4 && x < navX + 88) {
                 // Home tab - clean up and reload
                 refreshHome();
                 return;
             }
-            if (x >= navX + 104 && x < navX + 214) {
+            if (x >= navX + 88 && x < navX + 202) {
                 // Search tab
                 std::string query;
                 openSwkbd(query, "Search movies & series");
@@ -1617,15 +1796,17 @@ void App::handleTouch(int x, int y) {
                 }
                 return;
             }
-            if (x >= navX + 218 && x < navX + 328) {
+            if (x >= navX + 202 && x < navX + 316) {
                 m_screen = Screen::LIBRARY;
                 return;
             }
-            if (x >= navX + 332 && x < navX + 442) {
+            if (x >= navX + 316 && x < navX + 430) {
+                m_addonTab = 0;
+                m_addonIndex = 0;
                 m_screen = Screen::ADDONS;
                 return;
             }
-            if (x >= navX + 446 && x < navX + 576) {
+            if (x >= navX + 430 && x < navX + 570) {
                 m_settingsIndex = 0;
                 m_screen = Screen::SETTINGS;
                 return;
@@ -1636,36 +1817,129 @@ void App::handleTouch(int x, int y) {
             }
         }
 
+        // ─── Filter Pills Bar Click ───
+        bool hasTmdb = m_addonManager.hasTmdbAddon();
+        if (y >= 64 && y <= 104) {
+            if (hasTmdb) {
+                if (x >= 40 && x <= 118) {
+                    m_homeFilterIndex = 0; // All
+                    m_homeRowIndex = 0; m_homeColIndex = 0;
+                    m_homeDisplayDirty = true;
+                    return;
+                } else if (x >= 122 && x <= 228) {
+                    m_homeFilterIndex = 1; // Movies
+                    m_homeRowIndex = 0; m_homeColIndex = 0;
+                    m_homeDisplayDirty = true;
+                    return;
+                } else if (x >= 232 && x <= 356) {
+                    m_homeFilterIndex = 2; // TV Shows
+                    m_homeRowIndex = 0; m_homeColIndex = 0;
+                    m_homeDisplayDirty = true;
+                    return;
+                } else if (x >= 360 && x <= 470) {
+                    m_homeFilterIndex = 3; // Live TV
+                    m_homeRowIndex = 0; m_homeColIndex = 0;
+                    m_homeDisplayDirty = true;
+                    return;
+                } else if (x >= 474 && x <= 594) {
+                    m_homeFilterIndex = 4; // Add-ons
+                    m_homeRowIndex = 0; m_homeColIndex = 0;
+                    m_homeDisplayDirty = true;
+                    return;
+                }
+            } else {
+                if (x >= 40 && x <= 118) {
+                    m_homeFilterIndex = 0; // All
+                    m_homeRowIndex = 0; m_homeColIndex = 0;
+                    m_homeDisplayDirty = true;
+                    return;
+                } else if (x >= 122 && x <= 230) {
+                    m_homeFilterIndex = 3; // Live TV
+                    m_homeRowIndex = 0; m_homeColIndex = 0;
+                    m_homeDisplayDirty = true;
+                    return;
+                } else if (x >= 234 && x <= 354) {
+                    m_homeFilterIndex = 4; // Add-ons
+                    m_homeRowIndex = 0; m_homeColIndex = 0;
+                    m_homeDisplayDirty = true;
+                    return;
+                }
+            }
+        }
+
         // ─── Catalog Posters Grid ───
-        std::vector<CatalogRow> localCatalogs = getHomeDisplayCatalogs();
+        const auto& localCatalogs = getHomeDisplayCatalogs();
         if (localCatalogs.empty()) return;
 
-        int startY = 74;
-        int visibleRows = 2;
+        int startY = 122;
         int firstRow = m_homeRowIndex > 0 ? m_homeRowIndex - 1 : 0;
-        int maxVisibleCols = (SCREEN_W - 80) / (POSTER_W + POSTER_GAP);
 
-        for (int r = firstRow; r < (int)localCatalogs.size() && r < firstRow + visibleRows + 1; r++) {
+        auto getRowHeight = [&localCatalogs](int r) -> int {
+            if (r < 0 || r >= (int)localCatalogs.size()) return 280;
+            bool isCW = (localCatalogs[r].addonName == "SwitchStream" || localCatalogs[r].catalogName == "Continue Watching");
+            bool isLocal = (localCatalogs[r].addonName == "Local" || localCatalogs[r].catalogName == "Local Videos");
+            return (isCW || isLocal) ? 175 : 280;
+        };
+
+        int curY = startY;
+        for (int r = firstRow; r < (int)localCatalogs.size(); r++) {
+            if (curY + 36 > SCREEN_H - 40) break;
             auto& row = localCatalogs[r];
-            int rowY = startY + (r - firstRow) * ROW_HEIGHT;
-            int cardY = rowY + 34;
+            int thisRowH = getRowHeight(r);
+            bool isCW = (row.addonName == "SwitchStream" || row.catalogName == "Continue Watching");
+            bool isLocal = (row.addonName == "Local" || row.catalogName == "Local Videos");
+            int cardW = (isCW || isLocal) ? 208 : POSTER_W;
+            int cardH = (isCW || isLocal) ? 118 : POSTER_H;
+            int cardGap = (isCW || isLocal) ? 16 : POSTER_GAP;
+            int maxVisibleCols = (SCREEN_W - 80) / (cardW + cardGap);
 
             int startCol = 0;
             if (r == m_homeRowIndex && m_homeColIndex >= maxVisibleCols)
                 startCol = m_homeColIndex - maxVisibleCols + 1;
 
+            int cardY = curY + 34;
             for (int c = startCol; c < (int)row.items.size() && c < startCol + maxVisibleCols; c++) {
-                int cardX = 40 + (c - startCol) * (POSTER_W + POSTER_GAP);
-                if (x >= cardX && x < cardX + POSTER_W && y >= cardY && y < cardY + POSTER_H) {
+                int cardX = 40 + (c - startCol) * (cardW + cardGap);
+                if (x >= cardX && x < cardX + cardW && y >= cardY && y < cardY + cardH) {
                     auto& item = row.items[c];
                     m_homeRowIndex = r;
                     m_homeColIndex = c;
                     m_detailMeta = item;
+
+                    std::string originUrl = row.transportUrl;
+                    std::string originName = row.addonName;
+
+                    if (row.addonName == "SwitchStream" || row.catalogName == "Continue Watching") {
+                        if (item.id.rfind("kisskh:", 0) == 0 || item.id.rfind("onetouchtv:", 0) == 0 ||
+                            item.id.rfind("idrama:", 0) == 0 || item.id.rfind("mkvdrama:", 0) == 0 ||
+                            item.id.rfind("kkphim:", 0) == 0 || item.id.rfind("ophim:", 0) == 0) {
+                            originName = "yastream";
+                        }
+                    }
+                    if (item.id.rfind("zee5:", 0) == 0 || item.id.rfind("sliv:", 0) == 0 || item.id.rfind("mx:", 0) == 0) {
+                        originName = "Indian Live TV";
+                    }
+
+                    bool isStandardId = (item.id.rfind("tt", 0) == 0 || item.id.rfind("tmdb:", 0) == 0);
+                    if (!isStandardId && (m_addonManager.isStreamAndCatalogAddon(originUrl) ||
+                                          m_addonManager.isStreamAndCatalogAddon(originName))) {
+                        m_detailOriginAddonUrl = originUrl;
+                        m_detailOriginAddonName = originName;
+                        m_detailFromStreamAndCatalogAddon = true;
+                        m_detailShowAllAddons = false;
+                    } else {
+                        m_detailOriginAddonUrl = "";
+                        m_detailOriginAddonName = "";
+                        m_detailFromStreamAndCatalogAddon = false;
+                        m_detailShowAllAddons = true;
+                    }
+
                     loadDetail(item.type, item.id);
                     m_screen = Screen::DETAIL;
                     return;
                 }
             }
+            curY += thisRowH;
         }
         break;
     }
@@ -1722,6 +1996,21 @@ void App::handleTouch(int x, int y) {
             if (x >= 30 && x <= SCREEN_W - 30 && y >= itemY - 2 && y <= itemY + 44) {
                 m_searchIndex = i;
                 m_detailMeta = localResults[i];
+
+                std::string originName = localResults[i].addonName;
+                bool isStandardId = (localResults[i].id.rfind("tt", 0) == 0 || localResults[i].id.rfind("tmdb:", 0) == 0);
+                if (!isStandardId && m_addonManager.isStreamAndCatalogAddon(originName)) {
+                    m_detailOriginAddonUrl = "";
+                    m_detailOriginAddonName = originName;
+                    m_detailFromStreamAndCatalogAddon = true;
+                    m_detailShowAllAddons = false;
+                } else {
+                    m_detailOriginAddonUrl = "";
+                    m_detailOriginAddonName = "";
+                    m_detailFromStreamAndCatalogAddon = false;
+                    m_detailShowAllAddons = true;
+                }
+
                 loadDetail(localResults[i].type, localResults[i].id);
                 m_screen = Screen::DETAIL;
                 return;
@@ -1733,6 +2022,17 @@ void App::handleTouch(int x, int y) {
 
     case Screen::DETAIL: {
         if (m_loadingDetail) return;
+
+        // Toggle All Sources pill tap
+        if (m_detailFromStreamAndCatalogAddon && x >= 845 + 385 - 180 && x <= 845 + 385 - 10 && y >= 80 + 10 && y <= 80 + 50) {
+            m_detailShowAllAddons = !m_detailShowAllAddons;
+            if (m_detailShowAllAddons) {
+                loadAdditionalStreams();
+            } else {
+                filterStreamsToOriginAddon();
+            }
+            return;
+        }
 
         // Bottom Bar prompts
         if (y >= SCREEN_H - 45) {
@@ -1909,6 +2209,15 @@ void App::handleTouch(int x, int y) {
         for (int i = 0; i < (int)items.size() && itemY < SCREEN_H - 60; i++) {
             if (x >= 30 && x <= SCREEN_W - 30 && y >= itemY - 2 && y <= itemY + 44) {
                 m_libraryIndex = i;
+                m_detailOriginAddonUrl = "";
+                m_detailOriginAddonName = "";
+                m_detailFromStreamAndCatalogAddon = false;
+                m_detailShowAllAddons = true;
+                m_detailMeta = MetaItem();
+                m_detailMeta.id = items[i].id;
+                m_detailMeta.type = items[i].type;
+                m_detailMeta.name = items[i].name;
+                m_detailMeta.poster = items[i].poster;
                 loadDetail(items[i].type, items[i].id);
                 m_screen = Screen::DETAIL;
                 return;
@@ -1937,14 +2246,14 @@ void App::handleTouch(int x, int y) {
         }
 
         // Top nav bar click
-        int navX = 280, navY = 14;
+        int navX = 220, navY = 14;
         if (y >= navY && y <= navY + 40) {
-            if (x >= navX + 4 && x < navX + 104) {
+            if (x >= navX + 4 && x < navX + 88) {
                 m_screen = Screen::HOME;
                 refreshHome();
                 return;
             }
-            if (x >= navX + 104 && x < navX + 218) {
+            if (x >= navX + 88 && x < navX + 202) {
                 openSwkbd(m_searchQuery, "Search movies & series");
                 if (!m_searchQuery.empty()) {
                     performSearch(m_searchQuery);
@@ -1952,11 +2261,15 @@ void App::handleTouch(int x, int y) {
                 }
                 return;
             }
-            if (x >= navX + 218 && x < navX + 332) {
+            if (x >= navX + 202 && x < navX + 316) {
                 m_screen = Screen::LIBRARY;
                 return;
             }
-            if (x >= navX + 446 && x < navX + 576) {
+            if (x >= navX + 316 && x < navX + 430) {
+                // Already on Addons
+                return;
+            }
+            if (x >= navX + 430 && x < navX + 570) {
                 updateCacheSizes();
                 m_settingsIndex = 0;
                 m_screen = Screen::SETTINGS;
@@ -1964,8 +2277,7 @@ void App::handleTouch(int x, int y) {
             }
         }
         if (x >= SCREEN_W - 130 && x <= SCREEN_W - 40 && y >= 18 && y <= 50) {
-            m_screen = Screen::HOME;
-            refreshHome();
+            m_running = false;
             return;
         }
 
@@ -1999,6 +2311,24 @@ void App::handleTouch(int x, int y) {
 
                 if (y >= btnY && y <= btnY + btnH) {
                     if (m_addonTab == 0) {
+                        std::string aId = addons[i].manifest.id;
+                        std::string aUrl = addons[i].transportUrl;
+                        bool isLocalAddon = (aId == "local-media" || aId == "local" || aUrl == "local://media");
+                        if (isLocalAddon) {
+                            std::string addonId = addons[i].manifest.id;
+                            bool newState = !addons[i].enabled;
+                            m_loading = true;
+                            m_addonActionText = newState ? "Enabling addon & updating catalogs..." : "Disabling addon...";
+                            if (m_installThread.joinable()) m_installThread.join();
+                            m_installThread = std::thread([this, addonId]() {
+                                m_addonManager.toggleAddon(addonId);
+                                m_addonManager.saveConfig(CONFIG_FILE);
+                                loadHomeCatalogs(true);
+                                m_loading = false;
+                                m_addonActionText = "";
+                            });
+                            return;
+                        }
                         // Left half: Toggle
                         if (x <= cx + 16 + btnW / 2) {
                             std::string addonId = addons[i].manifest.id;
@@ -2456,9 +2786,11 @@ void App::handleTouch(int x, int y) {
             m_lastTapTime = 0; // prevent triple tap
             if (x < SCREEN_W / 3) {
                 m_player.seek(-10.0);
+                triggerSkipIndicator(-10.0);
                 printf("[Touch] Double Tap: Seek -10s\n");
             } else if (x > 2 * SCREEN_W / 3) {
                 m_player.seek(10.0);
+                triggerSkipIndicator(10.0);
                 printf("[Touch] Double Tap: Seek +10s\n");
             } else {
                 m_player.togglePlay();
@@ -2510,7 +2842,12 @@ void App::handleTouch(int x, int y) {
                 double pct = (double)(x - barX) / barW;
                 if (pct < 0.0) pct = 0.0;
                 if (pct > 1.0) pct = 1.0;
-                m_player.seekAbsolute(pct * duration);
+                double targetPos = pct * duration;
+                double delta = targetPos - m_player.getPosition();
+                m_player.seekAbsolute(targetPos);
+                if (std::abs(delta) >= 1.0) {
+                    triggerSkipIndicator(delta);
+                }
             }
             return;
         }
@@ -2530,12 +2867,14 @@ void App::handleTouch(int x, int y) {
             }
             else if (x >= seekLX && x <= seekLX + btnSeekLW) {
                 m_player.seek(-10.0);
+                triggerSkipIndicator(-10.0);
             }
             else if (x >= pillX && x <= pillX + btnPlayW) {
                 m_player.togglePlay();
             }
             else if (x >= seekRX && x <= seekRX + btnSeekRW) {
                 m_player.seek(10.0);
+                triggerSkipIndicator(10.0);
             }
             else if (x >= utilX && x <= utilX + btnSubW) {
                 m_showSubList = true;
@@ -2575,13 +2914,16 @@ void App::handleTouch(int x, int y) {
 }
 
 void App::render() {
-    // Process any downloaded poster images from background threads (must be done on the main thread)
+    // Process downloaded poster images from background threads (budget max 3 per frame to prevent frame drops)
     std::vector<DownloadedImage> localQueue;
     {
         std::lock_guard<std::mutex> lock(m_downloadedMutex);
-        if (!m_downloadedQueue.empty()) {
-            localQueue = std::move(m_downloadedQueue);
-            m_downloadedQueue.clear();
+        size_t count = std::min<size_t>(m_downloadedQueue.size(), 3);
+        if (count > 0) {
+            localQueue.insert(localQueue.end(),
+                              std::make_move_iterator(m_downloadedQueue.begin()),
+                              std::make_move_iterator(m_downloadedQueue.begin() + count));
+            m_downloadedQueue.erase(m_downloadedQueue.begin(), m_downloadedQueue.begin() + count);
         }
     }
     for (const auto& img : localQueue) {
@@ -2614,13 +2956,13 @@ void App::render() {
     SDL_RenderClear(m_renderer);
 
     switch (m_screen) {
-    case Screen::HOME:     renderHome(); break;
-    case Screen::SEARCH:   renderSearch(); break;
-    case Screen::DETAIL:   renderDetail(); break;
-    case Screen::LIBRARY:  renderLibrary(); break;
-    case Screen::ADDONS:   renderAddons(); break;
-    case Screen::SETTINGS: renderSettings(); break;
-    default:               renderHome(); break;
+    case Screen::HOME:         renderHome(); break;
+    case Screen::SEARCH:       renderSearch(); break;
+    case Screen::DETAIL:       renderDetail(); break;
+    case Screen::LIBRARY:      renderLibrary(); break;
+    case Screen::ADDONS:       renderAddons(); break;
+    case Screen::SETTINGS:     renderSettings(); break;
+    default:                   renderHome(); break;
     }
 
     drawNavBar();
@@ -3059,8 +3401,25 @@ static std::string formatStreamDisplay(const Stream& s) {
     std::string addonFromField;
     if (!nameLines.empty()) {
         addonFromField = nameLines[0];
+        if (addonFromField.size() >= 2 && addonFromField.front() == '[' && addonFromField.back() == ']') {
+            addonFromField = addonFromField.substr(1, addonFromField.size() - 2);
+        }
         if (nameLines.size() > 1) {
-            qualityStr = nameLines[1];
+            std::string sub = nameLines[1];
+            std::string lowAddon = addonFromField;
+            for (char& c : lowAddon) c = (char)tolower((unsigned char)c);
+            if (lowAddon.find("yastream") != std::string::npos) {
+                if (sub == "kisskh") providerStr = "KissKH";
+                else if (sub == "onetouchtv") providerStr = "OneTouchTV";
+                else if (sub == "kkphim") providerStr = "KKPhim";
+                else if (sub == "ophim") providerStr = "OPhim";
+                else if (sub == "idrama") providerStr = "iDrama";
+                else if (sub == "mkvdrama") providerStr = "MKVDrama";
+                else providerStr = sub;
+                qualityStr.clear();
+            } else {
+                qualityStr = sub;
+            }
         } else {
             if (nameLines[0].find("1080p") != std::string::npos ||
                 nameLines[0].find("720p") != std::string::npos ||
@@ -3234,7 +3593,7 @@ void App::renderPlayer() {
         m_player.render(SCREEN_W, SCREEN_H);
         SDL_RenderFlush(m_renderer);
 
-        SDL_SetRenderDrawColor(m_renderer, 10, 10, 15, 255);
+        SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
         SDL_RenderClear(m_renderer);
 
         // Center card coordinates
@@ -3267,7 +3626,7 @@ void App::renderPlayer() {
         }
 
         // Glassmorphic card body
-        drawFilledRoundRect(cardX, cardY, cardW, cardH, 14, {15, 18, 25, 240});
+        drawFilledRoundRect(cardX, cardY, cardW, cardH, 14, {14, 14, 18, 245});
         drawRoundRect(cardX, cardY, cardW, cardH, 14, {255, 255, 255, 35});
 
         if (isNativeTorrent) {
@@ -3300,7 +3659,7 @@ void App::renderPlayer() {
                 statDesc = b;
             }
 
-            drawTextCentered(statDesc, SCREEN_W/2, cardY + 145, {100, 190, 255, 255}, m_fontNormal);
+            drawTextCentered(statDesc, SCREEN_W/2, cardY + 145, {220, 220, 230, 255}, m_fontNormal);
 
             // Draw progress bar track & fill
             drawFilledRoundRect(barX, barY, barW, barH, 5, {255, 255, 255, 30});
@@ -3349,6 +3708,14 @@ void App::renderPlayer() {
         m_player.render(SCREEN_W, SCREEN_H);
         SDL_RenderFlush(m_renderer);
 
+        // Software brightness dimming (for consistent dimming across docked & handheld)
+        if (m_brightness < 0.98f) {
+            int dimAlpha = (int)((1.0f - m_brightness) * 190.0f);
+            if (dimAlpha > 0) {
+                drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, (Uint8)dimAlpha});
+            }
+        }
+
         // 2. Draw OSD/UI overlays on top of the video frame
         if (showOsd) {
             double duration = m_player.getDuration();
@@ -3366,13 +3733,13 @@ void App::renderPlayer() {
             drawText(title, 30, 12, TEXT_PRIMARY, m_fontNormal);
 
             std::string timeStr = formatTime(displayPos) + " / " + formatTime(duration);
-            drawText(timeStr, SCREEN_W - 200, 15, {180, 200, 220, 255}, m_fontSmall);
+            drawText(timeStr, SCREEN_W - 200, 15, {200, 200, 210, 255}, m_fontSmall);
 
             if (TorrentStream::instance().isActive()) {
                 auto tstats = TorrentStream::instance().getStats();
                 char pbuf[64];
                 snprintf(pbuf, sizeof(pbuf), "%d peers | %.2f MB/s", tstats.livePeers, tstats.speedMBps);
-                drawText(pbuf, SCREEN_W - 420, 15, {100, 200, 255, 255}, m_fontSmall);
+                drawText(pbuf, SCREEN_W - 420, 15, {220, 220, 230, 255}, m_fontSmall);
             }
 
             // ─── Bottom Control Panel (glassmorphic floating) ───
@@ -3399,13 +3766,13 @@ void App::renderPlayer() {
             // Filled progress
             int fillW = (int)(progress * barW);
             if (fillW > 0) {
-                drawFilledRoundRect(barX, barY, fillW, barH, 3, {0, 180, 255, 200});
+                drawFilledRoundRect(barX, barY, fillW, barH, 3, {255, 255, 255, 230});
 
                 // Thumb/scrubber
                 int thumbX = barX + fillW;
                 int thumbSize = 14;
-                drawFilledRoundRect(thumbX - thumbSize/2 - 2, barY - thumbSize/2 + 1, thumbSize + 4, thumbSize + 2, 8, {0, 180, 255, 50});
-                drawFilledRoundRect(thumbX - thumbSize/2, barY - thumbSize/2 + 2, thumbSize, thumbSize, 7, {255, 255, 240});
+                drawFilledRoundRect(thumbX - thumbSize/2 - 2, barY - thumbSize/2 + 1, thumbSize + 4, thumbSize + 2, 8, {255, 255, 255, 60});
+                drawFilledRoundRect(thumbX - thumbSize/2, barY - thumbSize/2 + 2, thumbSize, thumbSize, 7, {255, 255, 255, 255});
             }
 
             // ─── Control Buttons Row ───
@@ -3442,11 +3809,11 @@ void App::renderPlayer() {
             // Play/Pause button
             bool paused = m_player.isPaused();
             if (!paused) {
-                drawFilledRoundRect(pillX - 2, ctrlY - 2, btnPlayW + 4, 34, 8, {0, 180, 255, 30});
+                drawFilledRoundRect(pillX - 2, ctrlY - 2, btnPlayW + 4, 34, 8, {255, 255, 255, 30});
             }
-            drawFilledRoundRect(pillX, ctrlY, btnPlayW, 30, 8, paused ? SDL_Color{255, 100, 100, 60} : SDL_Color{0, 180, 255, 60});
+            drawFilledRoundRect(pillX, ctrlY, btnPlayW, 30, 8, paused ? SDL_Color{255, 100, 100, 60} : SDL_Color{255, 255, 255, 40});
             drawRoundRect(pillX, ctrlY, btnPlayW, 30, 8, {255, 255, 255, 60});
-            drawTextCentered(paused ? "PLAY" : "PAUSE", pillX + btnPlayW / 2, ctrlY + 5, paused ? SDL_Color{255, 140, 140, 255} : SDL_Color{100, 210, 255, 255}, m_fontSmall);
+            drawTextCentered(paused ? "PLAY" : "PAUSE", pillX + btnPlayW / 2, ctrlY + 5, paused ? SDL_Color{255, 140, 140, 255} : SDL_Color{255, 255, 255, 255}, m_fontSmall);
 
             // +10s button
             drawFilledRoundRect(seekRX, ctrlY, btnSeekRW, 30, 8, {255, 255, 255, 15});
@@ -3470,14 +3837,17 @@ void App::renderPlayer() {
 
         // 3. Swipe to Scrub Indicator
         if (m_isScrubbing) {
-            int scrubW = 280;
-            int scrubH = 60;
+            int scrubW = 340;
+            int scrubH = 64;
             int scrubX = SCREEN_W/2 - scrubW/2;
             int scrubY = 80;
-            drawFilledRoundRect(scrubX, scrubY, scrubW, scrubH, 10, {0, 0, 0, 230});
-            drawRoundRect(scrubX, scrubY, scrubW, scrubH, 10, ACCENT);
-            std::string scrubStr = "Scrub: " + formatTime(m_scrubCurrentPos);
-            drawText(scrubStr, scrubX + 30, scrubY + 18, TEXT_PRIMARY, m_fontNormal);
+            drawFilledRoundRect(scrubX, scrubY, scrubW, scrubH, 12, {14, 14, 16, 240});
+            drawRoundRect(scrubX, scrubY, scrubW, scrubH, 12, ACCENT);
+            double scrubDelta = m_scrubCurrentPos - m_scrubStartPos;
+            int deltaSec = (int)std::round(scrubDelta);
+            std::string deltaStr = (deltaSec >= 0 ? "+" : "") + std::to_string(deltaSec) + "s";
+            std::string scrubStr = "Scrub: " + formatTime(m_scrubCurrentPos) + "  (" + deltaStr + ")";
+            drawTextCentered(scrubStr, scrubX + scrubW / 2, scrubY + 20, TEXT_PRIMARY, m_fontNormal);
         }
 
         // 4. Subtitle / Audio Track List overlays
@@ -3487,8 +3857,8 @@ void App::renderPlayer() {
             int subX = SCREEN_W/2 - subW/2;
             int subY = SCREEN_H/2 - subH/2;
 
-            drawFilledRoundRect(subX, subY, subW, subH, 16, {16, 20, 30, 248});
-            drawRoundRect(subX, subY, subW, subH, 16, {40, 50, 75, 200});
+            drawFilledRoundRect(subX, subY, subW, subH, 16, {16, 16, 18, 250});
+            drawRoundRect(subX, subY, subW, subH, 16, {50, 50, 56, 200});
 
             if (m_subAddonMode) {
                 // ─── Addon Subtitles View (OpenSubtitles v3) ───
@@ -3519,7 +3889,7 @@ void App::renderPlayer() {
                         int rowY = subY + 80;
                         for (int i = startIdx; i < (int)localSubs.size() && i < startIdx + maxVis; i++) {
                             bool sel = (i == m_subAddonIndex);
-                            SDL_Color bg = sel ? CARD_HL : SDL_Color{25, 32, 46, 200};
+                            SDL_Color bg = sel ? CARD_HL : SDL_Color{24, 24, 28, 200};
                             drawFilledRoundRect(subX + 24, rowY, subW - 48, 44, 8, bg);
                             if (sel) {
                                 drawRoundRect(subX + 24, rowY, subW - 48, 44, 8, ACCENT);
@@ -3529,7 +3899,7 @@ void App::renderPlayer() {
                             std::string lang = localSubs[i].lang;
                             for (char& c : lang) c = (char)toupper((unsigned char)c);
                             if (lang.empty()) lang = "SUB";
-                            drawFilledRoundRect(subX + 36, rowY + 10, 48, 24, 4, {0, 180, 210, 50});
+                            drawFilledRoundRect(subX + 36, rowY + 10, 48, 24, 4, {255, 255, 255, 30});
                             drawTextCentered(lang, subX + 60, rowY + 14, ACCENT, m_fontSmall);
 
                             // Subtitle title / file
@@ -3552,11 +3922,11 @@ void App::renderPlayer() {
                 // Option 0: Add subtitle from addon button
                 int btnAddY = subY + 58;
                 bool selAdd = (m_subListIndex == 0);
-                drawFilledRoundRect(subX + 24, btnAddY, subW - 48, 44, 8, selAdd ? CARD_HL : SDL_Color{28, 36, 52, 230});
+                drawFilledRoundRect(subX + 24, btnAddY, subW - 48, 44, 8, selAdd ? CARD_HL : SDL_Color{26, 26, 30, 230});
                 if (selAdd) {
                     drawRoundRect(subX + 24, btnAddY, subW - 48, 44, 8, ACCENT);
                 } else {
-                    drawRoundRect(subX + 24, btnAddY, subW - 48, 44, 8, {50, 64, 92, 180});
+                    drawRoundRect(subX + 24, btnAddY, subW - 48, 44, 8, {50, 50, 58, 180});
                 }
                 drawText("+ Add Subtitle from Addon (OpenSubtitles v3)", subX + 42, btnAddY + 12, selAdd ? ACCENT : TEXT_PRIMARY, m_fontNormal);
 
@@ -3574,7 +3944,7 @@ void App::renderPlayer() {
                 int rowY = subY + 138;
                 for (int i = startIdx; i < (int)tracks.size() && i < startIdx + maxVis; i++) {
                     bool sel = (m_subListIndex == 1 + i);
-                    SDL_Color bg = sel ? CARD_HL : (tracks[i].selected ? SDL_Color{0, 180, 255, 30} : SDL_Color{25, 32, 46, 200});
+                    SDL_Color bg = sel ? CARD_HL : (tracks[i].selected ? SDL_Color{255, 255, 255, 35} : SDL_Color{24, 24, 28, 200});
                     drawFilledRoundRect(subX + 24, rowY, subW - 48, 42, 6, bg);
                     if (sel) {
                         drawRoundRect(subX + 24, rowY, subW - 48, 42, 6, ACCENT);
@@ -3650,7 +4020,7 @@ void App::renderPlayer() {
             int rowY = audY + 65;
             for (int i = startIdx; i < (int)tracks.size() && i < startIdx + maxVis; i++) {
                 bool sel = (i == m_audioListIndex);
-                SDL_Color bg = sel ? CARD_HL : (tracks[i].selected ? SDL_Color{0, 180, 255, 30} : SDL_Color{255, 255, 255, 10});
+                SDL_Color bg = sel ? CARD_HL : (tracks[i].selected ? SDL_Color{255, 255, 255, 35} : SDL_Color{255, 255, 255, 10});
                 drawFilledRoundRect(audX + 20, rowY, audW - 40, 42, 6, bg);
                 if (sel) {
                     drawRoundRect(audX + 20, rowY, audW - 40, 42, 6, ACCENT);
@@ -3691,6 +4061,92 @@ void App::renderPlayer() {
             drawTextCentered("2X  ▶▶", badgeX + badgeW / 2, badgeY + 6, ACCENT, m_fontNormal);
         }
 
+        // 6. Skip Indicator Badge (+5s, +10s, -15s, etc.)
+        if (!m_isScrubbing && (now - m_skipShowTime < 1300)) {
+            int pillW = 220;
+            int pillH = 68;
+            int pillX = (SCREEN_W - pillW) / 2;
+            int pillY = SCREEN_H / 2 - 80;
+
+            int totalSec = (int)std::round(m_skipDelta);
+            bool isPos = totalSec >= 0;
+            int absSec = std::abs(totalSec);
+            std::string deltaText;
+            if (absSec >= 60) {
+                int m = absSec / 60;
+                int s = absSec % 60;
+                deltaText = (isPos ? "+" : "-") + std::to_string(m) + "m" + (s > 0 ? (" " + std::to_string(s) + "s") : "");
+            } else {
+                deltaText = (isPos ? "+" : "-") + std::to_string(absSec) + "s";
+            }
+            std::string iconText = isPos ? "▶▶  " : "◀◀  ";
+
+            drawFilledRoundRect(pillX, pillY, pillW, pillH, 14, {14, 14, 16, 240});
+            drawRoundRect(pillX, pillY, pillW, pillH, 14, isPos ? SDL_Color{255, 255, 255, 200} : SDL_Color{255, 110, 110, 180});
+
+            drawTextCentered(iconText + deltaText, pillX + pillW / 2, pillY + 12, isPos ? SDL_Color{255, 255, 255, 255} : SDL_Color{255, 125, 125, 255}, m_fontLarge);
+            std::string posStr = formatTime(m_player.getPosition());
+            drawTextCentered(posStr, pillX + pillW / 2, pillY + 44, TEXT_SECONDARY, m_fontSmall);
+        }
+
+        // 7. Brightness HUD (Left side swipe indicator)
+        if (now - m_brightnessShowTime < 1500) {
+            int hudW = 50;
+            int hudH = 210;
+            int hudX = 40;
+            int hudY = (SCREEN_H - hudH) / 2;
+
+            drawFilledRoundRect(hudX, hudY, hudW, hudH, 12, {14, 14, 16, 240});
+            drawRoundRect(hudX, hudY, hudW, hudH, 12, {255, 205, 50, 120});
+
+            drawTextCentered("BRT", hudX + hudW / 2, hudY + 10, {255, 215, 60, 255}, m_fontSmall);
+
+            int barW = 8;
+            int barH = 120;
+            int barX = hudX + (hudW - barW) / 2;
+            int barY = hudY + 36;
+            drawFilledRoundRect(barX, barY, barW, barH, 4, {255, 255, 255, 30});
+
+            float brtClamped = std::clamp(m_brightness, 0.0f, 1.0f);
+            int fillH = (int)(brtClamped * barH);
+            if (fillH > 0) {
+                int fillY = barY + barH - fillH;
+                drawFilledRoundRect(barX, fillY, barW, fillH, 4, {255, 210, 50, 255});
+            }
+
+            std::string pctStr = std::to_string((int)std::round(brtClamped * 100.0f)) + "%";
+            drawTextCentered(pctStr, hudX + hudW / 2, hudY + hudH - 26, TEXT_PRIMARY, m_fontSmall);
+        }
+
+        // 8. Volume HUD (Right side swipe indicator)
+        if (now - m_volumeShowTime < 1500) {
+            int hudW = 50;
+            int hudH = 210;
+            int hudX = SCREEN_W - hudW - 40;
+            int hudY = (SCREEN_H - hudH) / 2;
+
+            drawFilledRoundRect(hudX, hudY, hudW, hudH, 12, {14, 14, 16, 240});
+            drawRoundRect(hudX, hudY, hudW, hudH, 12, {255, 255, 255, 140});
+
+            drawTextCentered("VOL", hudX + hudW / 2, hudY + 10, {255, 255, 255, 255}, m_fontSmall);
+
+            int barW = 8;
+            int barH = 120;
+            int barX = hudX + (hudW - barW) / 2;
+            int barY = hudY + 36;
+            drawFilledRoundRect(barX, barY, barW, barH, 4, {255, 255, 255, 30});
+
+            double curVol = m_player.getVolume();
+            int fillH = (int)((std::clamp(curVol, 0.0, 100.0) / 100.0) * barH);
+            if (fillH > 0) {
+                int fillY = barY + barH - fillH;
+                drawFilledRoundRect(barX, fillY, barW, fillH, 4, {255, 255, 255, 255});
+            }
+
+            std::string pctStr = std::to_string((int)std::round(curVol)) + "%";
+            drawTextCentered(pctStr, hudX + hudW / 2, hudY + hudH - 26, TEXT_PRIMARY, m_fontSmall);
+        }
+
         renderResourceHUD();
         SDL_RenderPresent(m_renderer);
     }
@@ -3698,23 +4154,45 @@ void App::renderPlayer() {
 
 static std::string formatCatalogTitle(const std::string& addonName, const std::string& catalogName) {
     if (addonName == "SwitchStream" && catalogName == "Continue Watching") {
-        return "▶  Continue Watching";
+        return "Recently Watched";
+    }
+    if (addonName == "The Movie Database Addon" || addonName == "TMDB" || addonName == "tmdb-addon") {
+        if (catalogName == "Popular") return "Popular Movies";
+        if (catalogName == "Trending") return "Trending Movies & Series";
+        if (catalogName == "Latest Releases") return "Latest Releases";
+        return catalogName;
+    }
+    if (addonName == "TMDB Collections") {
+        if (catalogName == "Popular") return "Popular Collections";
+        if (catalogName == "Top Rated") return "Top Rated Collections";
+        if (catalogName == "New Releases") return "New Release Collections";
+        return "Collections: " + catalogName;
+    }
+    if (addonName == "InMax") {
+        return "InMax: Trending Indian";
+    }
+    if (addonName == "IndiaStreams") {
+        return catalogName;
     }
     if (addonName == "yastream") {
         std::string lowerC = catalogName;
         for (char& c : lowerC) c = (char)tolower((unsigned char)c);
-        if (lowerC.find("kisskh") != std::string::npos) return "Asian & K-Dramas (KissKH)";
-        if (lowerC.find("onetouchtv") != std::string::npos) return "Asian & K-Dramas (OneTouchTV)";
-        return "Asian & K-Dramas (yastream)";
+        if (lowerC.find("kisskh") != std::string::npos) {
+            if (lowerC.find("korean") != std::string::npos) return "Asian & K-Dramas (KissKH)";
+            if (lowerC.find("chinese") != std::string::npos) return "Asian & C-Dramas (KissKH)";
+            return "Asian & K-Dramas (KissKH)";
+        }
+        if (lowerC.find("onetouchtv") != std::string::npos) return "Asian Dramas (OneTouchTV)";
+        return "Asian & K-Dramas";
     }
     if (addonName.find("K-Drama Crush") != std::string::npos || addonName.find("kdrama") != std::string::npos) {
-        return "Trending K-Dramas (K-Drama Crush)";
+        return "Trending K-Dramas";
     }
     if (addonName == "Cinemeta") {
         std::string lowerC = catalogName;
         for (char& c : lowerC) c = (char)tolower((unsigned char)c);
         if (lowerC.find("movie") != std::string::npos || lowerC.find("top") != std::string::npos) return "Popular Movies";
-        if (lowerC.find("series") != std::string::npos) return "Trending Series";
+        if (lowerC.find("series") != std::string::npos) return "Popular TV Shows";
         return "Cinemeta — " + catalogName;
     }
     if (addonName == "CyberFlix Catalogs") {
@@ -3729,50 +4207,67 @@ static std::string formatCatalogTitle(const std::string& addonName, const std::s
         cleanCat.erase(tagPos, tag.size());
         while (!cleanCat.empty() && (cleanCat[0] == ' ' || cleanCat[0] == '-')) cleanCat.erase(0, 1);
     }
+    if (cleanCat.empty()) return addonName;
     return addonName + " — " + cleanCat;
 }
 
 void App::renderHome() {
-    // 1. Brand Logo
-    drawText("SwitchStream", 40, 18, TEXT_PRIMARY, m_fontLarge);
+    // 1. Top Navigation Bar
+    drawTopNavBar();
 
-    // 2. Top Navigation Pill Bar
-    int navX = 280, navY = 14, navW = 580, navH = 40;
-    drawFilledRoundRect(navX, navY, navW, navH, 20, NAV_CONTAINER);
-    drawRoundRect(navX, navY, navW, navH, 20, NAV_BORDER);
+    const auto& localCatalogs = getHomeDisplayCatalogs();
 
-    // Tab 0: Home (Active)
-    int tab0X = navX + 4;
-    int tab0W = 96;
-    drawFilledRoundRect(tab0X, navY + 4, tab0W, navH - 8, 16, ACCENT);
-    drawTextCentered("Home", tab0X + tab0W / 2, navY + 9, {10, 14, 22, 255}, m_fontNormal);
+    static uint32_t lastLogTime = 0;
+    uint32_t nowTicks = SDL_GetTicks();
+    if (nowTicks - lastLogTime > 8000) {
+        lastLogTime = nowTicks;
+        printf("[Home] Catalogs rendered: %zu rows, ImageCache: %.2f MB\n",
+               localCatalogs.size(),
+               m_imageCache ? (m_imageCache->memoryUsage() / (1024.0 * 1024.0)) : 0.0);
+    }
 
-    // Tab 1: Search
-    int tab1X = navX + 104;
-    int tab1W = 110;
-    drawTextCentered("Search [Y]", tab1X + tab1W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+    bool hasTmdb = m_addonManager.hasTmdbAddon();
+    int filterY = 68;
+    int filterH = 34;
 
-    // Tab 2: Library
-    int tab2X = navX + 218;
-    int tab2W = 110;
-    drawTextCentered("Library [L]", tab2X + tab2W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+    struct FilterPill {
+        int id;
+        std::string label;
+        int x, w;
+    };
+    std::vector<FilterPill> pills;
+    if (hasTmdb) {
+        pills = {
+            {0, "All", 40, 72},
+            {1, "Movies", 122, 102},
+            {2, "TV Shows", 234, 118},
+            {3, "Live TV", 362, 104},
+            {4, "Add-ons", 476, 114}
+        };
+    } else {
+        pills = {
+            {0, "All", 40, 72},
+            {3, "Live TV", 122, 104},
+            {4, "Add-ons", 236, 114}
+        };
+        if (m_homeFilterIndex != 0 && m_homeFilterIndex != 3 && m_homeFilterIndex != 4) {
+            m_homeFilterIndex = 0;
+        }
+    }
 
-    // Tab 3: Addons
-    int tab3X = navX + 332;
-    int tab3W = 110;
-    drawTextCentered("Addons [R]", tab3X + tab3W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
-
-    // Tab 4: Settings
-    int tab4X = navX + 446;
-    int tab4W = 126;
-    drawTextCentered("Settings [X]", tab4X + tab4W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
-
-    // Right quick exit badge
-    drawFilledRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {26, 32, 46, 200});
-    drawRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {44, 52, 74, 180});
-    drawTextCentered("[+] Exit", SCREEN_W - 85, 23, TEXT_SECONDARY, m_fontSmall);
-
-    std::vector<CatalogRow> localCatalogs = getHomeDisplayCatalogs();
+    for (const auto& pill : pills) {
+        bool selected = (pill.id == m_homeFilterIndex);
+        if (selected) {
+            drawFilledRoundRect(pill.x, filterY, pill.w, filterH, 16, {255, 255, 255, 255});
+            drawTextCentered(pill.label, pill.x + pill.w / 2, filterY + 7, {14, 14, 16, 255}, m_fontNormal);
+        } else {
+            drawFilledRoundRect(pill.x, filterY, pill.w, filterH, 16, {20, 20, 24, 220});
+            drawRoundRect(pill.x, filterY, pill.w, filterH, 16, {45, 45, 52, 180});
+            drawTextCentered(pill.label, pill.x + pill.w / 2, filterY + 7, TEXT_SECONDARY, m_fontNormal);
+        }
+    }
+    int lastPillEnd = pills.back().x + pills.back().w;
+    drawText("[ZL/ZR] Filters", lastPillEnd + 20, filterY + 8, TEXT_SECONDARY, m_fontSmall);
 
     if (m_loadingHome && localCatalogs.empty()) {
         drawSpinner(SCREEN_W/2, SCREEN_H/2 - 40, 24);
@@ -3786,74 +4281,181 @@ void App::renderHome() {
         return;
     }
 
-    int startY = 74;
-    int visibleRows = 2;
+    int startY = 122;
     int firstRow = m_homeRowIndex > 0 ? m_homeRowIndex - 1 : 0;
 
-    for (int r = firstRow; r < (int)localCatalogs.size() && r < firstRow + visibleRows + 1; r++) {
-        auto& row = localCatalogs[r];
-        int y = startY + (r - firstRow) * ROW_HEIGHT;
-        if (y + 40 > SCREEN_H - 40) break;
+    auto getRowHeight = [&localCatalogs](int r) -> int {
+        if (r < 0 || r >= (int)localCatalogs.size()) return 280;
+        bool isCW = (localCatalogs[r].addonName == "SwitchStream" || localCatalogs[r].catalogName == "Continue Watching");
+        bool isLocal = (localCatalogs[r].addonName == "Local" || localCatalogs[r].catalogName == "Local Videos");
+        return (isCW || isLocal) ? 175 : 280;
+    };
 
-        // Clean, polished catalog title
+    static const SDL_Color RECENT_TINTS[6] = {
+        {18,  44,  64,  255}, // deep ocean teal
+        {54,  24,  40,  255}, // wine rose
+        {58,  38,  16,  255}, // warm amber bronze
+        {20,  32,  56,  255}, // royal navy
+        {18,  46,  36,  255}, // forest jade
+        {42,  24,  60,  255}  // midnight violet
+    };
+
+    int curY = startY;
+    for (int r = firstRow; r < (int)localCatalogs.size(); r++) {
+        if (curY + 36 > SCREEN_H - 40) break;
+        auto& row = localCatalogs[r];
+        int thisRowH = getRowHeight(r);
+        bool isCW = (row.addonName == "SwitchStream" || row.catalogName == "Continue Watching");
+        bool isLocal = (row.addonName == "Local" || row.catalogName == "Local Videos");
+
+        // Clean, polished catalog title matching mockup
         std::string title = formatCatalogTitle(row.addonName, row.catalogName);
         if (r == m_homeRowIndex) {
-            // Glowing cyan accent bar for active row
-            drawFilledRoundRect(40, y + 3, 4, 22, 2, ACCENT);
-            drawText(title, 52, y, TEXT_PRIMARY, m_fontLarge);
+            drawText(title, 40, curY, TEXT_PRIMARY, m_fontLarge);
         } else {
-            drawText(title, 40, y + 3, TEXT_SECONDARY, m_fontNormal);
+            drawText(title, 40, curY + 2, TEXT_SECONDARY, m_fontNormal);
         }
 
-        // Poster cards
         int x = 40;
-        int maxVisible = (SCREEN_W - 80) / (POSTER_W + POSTER_GAP);
+        int cardW = (isCW || isLocal) ? 208 : POSTER_W;
+        int cardH = (isCW || isLocal) ? 118 : POSTER_H;
+        int cardGap = (isCW || isLocal) ? 16 : POSTER_GAP;
+        int cardR = (isCW || isLocal) ? 12 : 8;
+        int maxVisible = (SCREEN_W - 80) / (cardW + cardGap);
+
         int startCol = 0;
         if (r == m_homeRowIndex && m_homeColIndex >= maxVisible)
             startCol = m_homeColIndex - maxVisible + 1;
 
+        int cardY = curY + 34;
         for (int c = startCol; c < (int)row.items.size() && c < startCol + maxVisible; c++) {
-            int cardX = x + (c - startCol) * (POSTER_W + POSTER_GAP);
-            int cardY = y + 34;
+            int cardX = x + (c - startCol) * (cardW + cardGap);
             bool selected = (r == m_homeRowIndex && c == m_homeColIndex);
-
-            // 1. Base card background
-            drawFilledRoundRect(cardX, cardY, POSTER_W, POSTER_H, 8, CARD_COLOR);
-
-            // 2. Poster image
-            drawPoster(row.items[c], cardX, cardY, POSTER_W, POSTER_H);
-            maskRoundedCorners(cardX, cardY, POSTER_W, POSTER_H, 8, BG_COLOR);
-
-            // 3. Smooth dark overlay band for readable title at bottom
-            drawFilledRect(cardX, cardY + POSTER_H - 36, POSTER_W, 36, {10, 14, 22, 225});
-            drawFilledRect(cardX, cardY + POSTER_H - 40, POSTER_W, 4, {10, 14, 22, 120});
-            maskRoundedCorners(cardX, cardY, POSTER_W, POSTER_H, 8, BG_COLOR);
-
-            // 4. Centered title with ellipsis
-            std::string name = row.items[c].name;
-            if (name.size() > 19) name = name.substr(0, 17) + "..";
-            drawTextCentered(name, cardX + POSTER_W / 2, cardY + POSTER_H - 26, TEXT_PRIMARY, m_fontSmall);
-
-            // 4b. Watch progress bar if item has active watch progress
             const LibraryItem* libItem = m_library.getItem(row.items[c].id);
-            if (libItem && libItem->progress > 0.01 && libItem->progress < 0.99) {
-                int barH = 5;
-                int barY = cardY + POSTER_H - barH;
-                drawFilledRect(cardX, barY, POSTER_W, barH, {10, 14, 22, 220});
-                int fillW = std::clamp((int)(POSTER_W * libItem->progress), 2, POSTER_W);
-                drawFilledRect(cardX, barY, fillW, barH, ACCENT);
-            }
 
-            // 5. Border: Glowing Cyan on selected, sleek dark border on unselected
-            if (selected) {
-                drawRoundRect(cardX - 3, cardY - 3, POSTER_W + 6, POSTER_H + 6, 11, {0, 229, 255, 60});
-                drawRoundRect(cardX - 2, cardY - 2, POSTER_W + 4, POSTER_H + 4, 10, {0, 229, 255, 140});
-                drawRoundRect(cardX - 1, cardY - 1, POSTER_W + 2, POSTER_H + 2, 9,  ACCENT);
-                drawRoundRect(cardX, cardY, POSTER_W, POSTER_H, 8, ACCENT);
+            if (isCW || isLocal) {
+                // ─── 16:9 Landscape Card (Continue Watching & Local Videos) ───
+                SDL_Color baseColor = isCW ? RECENT_TINTS[c % 6] : SDL_Color{20, 24, 32, 255};
+                drawFilledRoundRect(cardX, cardY, cardW, cardH, cardR, baseColor);
+
+                // Poster image or custom local video thumbnail
+                if (!row.items[c].poster.empty()) {
+                    drawPoster(row.items[c], cardX, cardY, cardW, cardH);
+                    maskRoundedCorners(cardX, cardY, cardW, cardH, cardR, BG_COLOR);
+                } else if (isLocal) {
+                    drawFilledRoundRect(cardX + cardW / 2 - 20, cardY + cardH / 2 - 28, 40, 40, 8, {28, 32, 44, 255});
+                    drawTextCentered("📼", cardX + cardW / 2, cardY + cardH / 2 - 18, ACCENT, m_fontNormal);
+                }
+
+                // Dark gradient overlay for clear typography
+                drawFilledRect(cardX, cardY + cardH - 52, cardW, 52, {0, 0, 0, 225});
+                drawFilledRect(cardX, cardY + cardH - 58, cardW, 6, {0, 0, 0, 110});
+                maskRoundedCorners(cardX, cardY, cardW, cardH, cardR, BG_COLOR);
+
+                // Item Title (measure and truncate to fit cardW - 24)
+                std::string name = row.items[c].name;
+                int maxCwW = cardW - 24;
+                int tw = 0, th = 0;
+                TTF_SizeUTF8(m_fontNormal, name.c_str(), &tw, &th);
+                while (tw > maxCwW && name.size() > 3) {
+                    name.pop_back();
+                    std::string test = name + "..";
+                    TTF_SizeUTF8(m_fontNormal, test.c_str(), &tw, &th);
+                    if (tw <= maxCwW) {
+                        name = test;
+                        break;
+                    }
+                }
+                drawText(name, cardX + 12, cardY + cardH - 46, TEXT_PRIMARY, m_fontNormal);
+
+                // Item Subtitle (e.g. "Local • MKV", "Movie • 41m left", "S1 E6 • 24m left")
+                std::string subText;
+                if (isLocal) {
+                    std::string p = row.items[c].id.substr(6);
+                    size_t d = p.rfind('.');
+                    std::string ext = (d != std::string::npos) ? p.substr(d + 1) : "VIDEO";
+                    for (char& ch : ext) ch = (char)toupper((unsigned char)ch);
+                    subText = "Local • " + ext;
+                } else if (row.items[c].type == "movie") {
+                    subText = "Movie";
+                } else {
+                    std::string vid = (libItem && !libItem->videoId.empty()) ? libItem->videoId : "";
+                    size_t c1 = vid.find(':');
+                    size_t c2 = (c1 != std::string::npos) ? vid.find(':', c1 + 1) : std::string::npos;
+                    if (c1 != std::string::npos && c2 != std::string::npos) {
+                        std::string sNum = vid.substr(c1 + 1, c2 - c1 - 1);
+                        std::string eNum = vid.substr(c2 + 1);
+                        subText = "S" + sNum + " E" + eNum;
+                    } else {
+                        subText = "Series";
+                    }
+                }
+                if (libItem && libItem->progress > 0.01) {
+                    int minsLeft = std::max(5, (int)((1.0 - libItem->progress) * 90));
+                    subText += " • " + std::to_string(minsLeft) + "m left";
+                }
+                drawText(subText, cardX + 12, cardY + cardH - 24, ACCENT, m_fontSmall);
+
+                // Progress Bar at bottom edge
+                if (libItem && libItem->progress > 0.01) {
+                    int barW = cardW - 24;
+                    int fillW = std::clamp((int)(barW * libItem->progress), 4, barW);
+                    int barY = cardY + cardH - 7;
+                    drawFilledRoundRect(cardX + 12, barY, barW, 4, 2, {24, 24, 28, 220});
+                    drawFilledRoundRect(cardX + 12, barY, fillW, 4, 2, ACCENT);
+                }
+
+                // Focus border
+                if (selected) {
+                    drawRoundRect(cardX - 1, cardY - 1, cardW + 2, cardH + 2, cardR + 1, {255, 255, 255, 100});
+                    drawRoundRect(cardX, cardY, cardW, cardH, cardR, ACCENT);
+                } else {
+                    drawRoundRect(cardX, cardY, cardW, cardH, cardR, {34, 34, 40, 160});
+                }
             } else {
-                drawRoundRect(cardX, cardY, POSTER_W, POSTER_H, 8, {38, 46, 64, 180});
+                // ─── Standard Vertical Poster Card ───
+                drawFilledRoundRect(cardX, cardY, cardW, cardH, cardR, CARD_COLOR);
+                drawPoster(row.items[c], cardX, cardY, cardW, cardH);
+                maskRoundedCorners(cardX, cardY, cardW, cardH, cardR, BG_COLOR);
+
+                // Dark overlay band for readable title
+                drawFilledRect(cardX, cardY + cardH - 34, cardW, 34, {0, 0, 0, 235});
+                drawFilledRect(cardX, cardY + cardH - 38, cardW, 4, {0, 0, 0, 110});
+                maskRoundedCorners(cardX, cardY, cardW, cardH, cardR, BG_COLOR);
+
+                // Left-aligned title with truncation strictly contained inside card
+                std::string name = row.items[c].name;
+                int maxW = cardW - 16;
+                int tw = 0, th = 0;
+                TTF_SizeUTF8(m_fontSmall, name.c_str(), &tw, &th);
+                while (tw > maxW && name.size() > 3) {
+                    name.pop_back();
+                    std::string test = name + "..";
+                    TTF_SizeUTF8(m_fontSmall, test.c_str(), &tw, &th);
+                    if (tw <= maxW) {
+                        name = test;
+                        break;
+                    }
+                }
+                drawText(name, cardX + 8, cardY + cardH - 24, TEXT_PRIMARY, m_fontSmall);
+
+                if (libItem && libItem->progress > 0.01 && libItem->progress < 0.99) {
+                    int barH = 4;
+                    int barY = cardY + cardH - barH;
+                    drawFilledRect(cardX, barY, cardW, barH, {10, 14, 22, 220});
+                    int fillW = std::clamp((int)(cardW * libItem->progress), 2, cardW);
+                    drawFilledRect(cardX, barY, fillW, barH, ACCENT);
+                }
+
+                if (selected) {
+                    drawRoundRect(cardX - 2, cardY - 2, cardW + 4, cardH + 4, cardR + 2, {255, 255, 255, 100});
+                    drawRoundRect(cardX, cardY, cardW, cardH, cardR, ACCENT);
+                } else {
+                    drawRoundRect(cardX, cardY, cardW, cardH, cardR, {38, 38, 44, 180});
+                }
             }
         }
+        curY += thisRowH;
     }
 
     // ─── QA Control: More than 5 Stream Addons Warning Modal ───
@@ -3866,7 +4468,7 @@ void App::renderHome() {
         int dy = (SCREEN_H - dh) / 2;
 
         // Modal card container
-        drawFilledRoundRect(dx, dy, dw, dh, 16, {20, 25, 38, 252});
+        drawFilledRoundRect(dx, dy, dw, dh, 16, {18, 18, 22, 252});
         drawRoundRect(dx, dy, dw, dh, 16, {255, 185, 0, 220}); // amber warning accent
 
         // Warning title
@@ -3946,7 +4548,7 @@ void App::renderSearch() {
 
 void App::renderDetail() {
     if (m_loadingDetail) {
-        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {12, 16, 26, 255});
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 255});
         drawSpinner(SCREEN_W / 2, SCREEN_H / 2 - 30, 22);
         drawTextCentered("Loading item details...", SCREEN_W / 2, SCREEN_H / 2 + 25, TEXT_SECONDARY, m_fontNormal);
         return;
@@ -3965,9 +4567,9 @@ void App::renderDetail() {
     if (bgTex) {
         SDL_Rect fullScreen = {0, 0, SCREEN_W, SCREEN_H};
         SDL_RenderCopy(m_renderer, bgTex, nullptr, &fullScreen);
-        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {10, 14, 22, 228});
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 235});
     } else {
-        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {12, 16, 26, 255});
+        drawFilledRect(0, 0, SCREEN_W, SCREEN_H, {0, 0, 0, 255});
     }
 
     // 2. Left Column: Large Poster Card (rounded with shadow)
@@ -3979,8 +4581,8 @@ void App::renderDetail() {
 
     drawFilledRoundRect(postX - 2, postY - 2, postW + 4, postH + 4, postR + 2, {0, 0, 0, 150});
     drawPoster(m_detailMeta, postX, postY, postW, postH);
-    maskRoundedCorners(postX, postY, postW, postH, postR, {12, 16, 24, 255});
-    drawRoundRect(postX, postY, postW, postH, postR, {55, 70, 95, 140});
+    maskRoundedCorners(postX, postY, postW, postH, postR, {0, 0, 0, 255});
+    drawRoundRect(postX, postY, postW, postH, postR, {45, 50, 65, 140});
 
     // Extract thread-safe state for middle & right panels
     bool isLoading = false;
@@ -4032,17 +4634,18 @@ void App::renderDetail() {
         int tw = 0, th = 0;
         TTF_SizeUTF8(m_fontSmall, text.c_str(), &tw, &th);
         int pillW = tw + 22;
-        drawFilledRoundRect(badgeX, badgeY, pillW, 26, 8, {42, 52, 72, 200});
-        drawRoundRect(badgeX, badgeY, pillW, 26, 8, {65, 80, 110, 160});
-        drawText(text, badgeX + 11, badgeY + 5, {220, 230, 245, 255}, m_fontSmall);
+        drawFilledRoundRect(badgeX, badgeY, pillW, 26, 8, {26, 26, 30, 200});
+        drawRoundRect(badgeX, badgeY, pillW, 26, 8, {55, 55, 62, 160});
+        drawText(text, badgeX + 11, badgeY + 5, {220, 220, 230, 255}, m_fontSmall);
         badgeX += pillW + 10;
     };
 
+    bool isCollection = (m_detailMeta.id.rfind("ctmdb.", 0) == 0 || m_detailMeta.type == "collections");
     if (!m_detailMeta.releaseInfo.empty()) {
         drawBadge(m_detailMeta.releaseInfo);
     }
     if (!localEpisodes.empty()) {
-        drawBadge(std::to_string(localEpisodes.size()) + " Episodes");
+        drawBadge(std::to_string(localEpisodes.size()) + (isCollection ? " Movies" : " Episodes"));
     } else if (!m_detailMeta.runtime.empty()) {
         drawBadge(m_detailMeta.runtime);
     }
@@ -4079,15 +4682,14 @@ void App::renderDetail() {
         if (seasonY < 290) seasonY = 290;
 
         int curSeason = localSeasons.empty() ? 1 : localSeasons[currentSeasonFilter];
-        std::string seasonStr = "Season " + std::to_string(curSeason);
-        if (localSeasons.size() > 1) seasonStr += "  ◄ ► (L/R)";
+        std::string seasonStr = isCollection ? "Movies in Collection" : ("Season " + std::to_string(curSeason) + (localSeasons.size() > 1 ? "  ◄ ► (L/R)" : ""));
 
         int sW = 0, sH = 0;
         TTF_SizeUTF8(m_fontSmall, seasonStr.c_str(), &sW, &sH);
         int pillW = sW + 24;
-        drawFilledRoundRect(infoX, seasonY, pillW, 28, 8, {36, 48, 70, 220});
-        drawRoundRect(infoX, seasonY, pillW, 28, 8, {0, 180, 220, 160});
-        drawText(seasonStr, infoX + 12, seasonY + 5, {0, 229, 255, 255}, m_fontSmall);
+        drawFilledRoundRect(infoX, seasonY, pillW, 28, 8, {28, 28, 34, 220});
+        drawRoundRect(infoX, seasonY, pillW, 28, 8, {70, 70, 80, 160});
+        drawText(seasonStr, infoX + 12, seasonY + 5, {255, 255, 255, 255}, m_fontSmall);
 
         // Episode List
         int epListY = seasonY + 36;
@@ -4111,21 +4713,26 @@ void App::renderDetail() {
             bool isFocused = (focus == DetailFocus::EPISODES && i == currentEpIndex);
             bool isCurrentSelected = (i == currentEpIndex);
 
-            SDL_Color bgCol = isFocused ? SDL_Color{28, 54, 82, 240} : (isCurrentSelected ? SDL_Color{34, 44, 62, 200} : SDL_Color{22, 28, 42, 160});
-            SDL_Color borderCol = isFocused ? SDL_Color{0, 229, 255, 255} : (isCurrentSelected ? SDL_Color{0, 180, 215, 120} : SDL_Color{42, 52, 72, 120});
+            SDL_Color bgCol = isFocused ? SDL_Color{36, 36, 44, 240} : (isCurrentSelected ? SDL_Color{28, 28, 34, 200} : SDL_Color{18, 18, 22, 160});
+            SDL_Color borderCol = isFocused ? SDL_Color{255, 255, 255, 255} : (isCurrentSelected ? SDL_Color{120, 120, 130, 120} : SDL_Color{40, 40, 46, 120});
 
             drawFilledRoundRect(infoX, curEpY, infoW, epItemH, 8, bgCol);
             drawRoundRect(infoX, curEpY, infoW, epItemH, 8, borderCol);
             if (isFocused) {
-                drawRoundRect(infoX - 1, curEpY - 1, infoW + 2, epItemH + 2, 8, {0, 229, 255, 100});
+                drawRoundRect(infoX - 1, curEpY - 1, infoW + 2, epItemH + 2, 8, {255, 255, 255, 100});
             }
 
             auto& ep = currentSeasonEps[i];
-            std::string epLabel = "Episode " + std::to_string(ep.episode);
-            if (!ep.title.empty()) epLabel += " — " + ep.title;
+            std::string epLabel;
+            if (isCollection) {
+                epLabel = !ep.title.empty() ? ep.title : ("Movie " + std::to_string(ep.episode));
+            } else {
+                epLabel = "Episode " + std::to_string(ep.episode);
+                if (!ep.title.empty()) epLabel += " — " + ep.title;
+            }
             if (epLabel.size() > 42) epLabel = epLabel.substr(0, 39) + "...";
 
-            SDL_Color txtCol = isFocused ? SDL_Color{0, 229, 255, 255} : (isCurrentSelected ? SDL_Color{255, 255, 255, 255} : SDL_Color{180, 195, 215, 255});
+            SDL_Color txtCol = isFocused ? SDL_Color{255, 255, 255, 255} : (isCurrentSelected ? SDL_Color{255, 255, 255, 255} : SDL_Color{180, 180, 190, 255});
             drawText(epLabel, infoX + 14, curEpY + 8, txtCol, m_fontSmall);
 
             curEpY += epItemH + epGap;
@@ -4139,10 +4746,25 @@ void App::renderDetail() {
     int panelH = 540;
     int panelR = 16;
 
-    drawFilledRoundRect(panelX, panelY, panelW, panelH, panelR, {16, 22, 34, 225});
-    drawRoundRect(panelX, panelY, panelW, panelH, panelR, {48, 62, 88, 160});
+    drawFilledRoundRect(panelX, panelY, panelW, panelH, panelR, {10, 10, 14, 240});
+    drawRoundRect(panelX, panelY, panelW, panelH, panelR, {28, 30, 40, 160});
 
     drawText("Streams", panelX + 22, panelY + 18, {255, 255, 255, 255}, m_fontLarge);
+
+    if (m_detailFromStreamAndCatalogAddon && !isCollection) {
+        int pillX = panelX + panelW - 175;
+        int pillY = panelY + 14;
+        int pillW = 155;
+        int pillH = 30;
+        bool allOn = m_detailShowAllAddons;
+        SDL_Color bg = allOn ? SDL_Color{255, 255, 255, 220} : SDL_Color{30, 30, 36, 220};
+        SDL_Color border = allOn ? ACCENT : SDL_Color{60, 60, 70, 180};
+        SDL_Color txtCol = allOn ? SDL_Color{14, 14, 16, 255} : SDL_Color{210, 210, 220, 255};
+        drawFilledRoundRect(pillX, pillY, pillW, pillH, 8, bg);
+        drawRoundRect(pillX, pillY, pillW, pillH, 8, border);
+        std::string label = allOn ? "[Y] All Sources: ON" : "[Y] All Sources: OFF";
+        drawTextCentered(label, pillX + pillW / 2, pillY + 6, txtCol, m_fontSmall);
+    }
 
     if (isLoading) {
         drawSpinner(panelX + panelW / 2, panelY + panelH / 2 - 15, 18);
@@ -4174,28 +4796,38 @@ void App::renderDetail() {
             StreamCardDisplay card = formatStreamCard(localStreams[i]);
 
             if (isSel) {
-                drawFilledRoundRect(cardX, curCardY, cardW, cardH, cardR, {22, 45, 68, 245});
-                drawRoundRect(cardX, curCardY, cardW, cardH, cardR, {0, 229, 255, 255});
-                drawRoundRect(cardX - 1, curCardY - 1, cardW + 2, cardH + 2, cardR, {0, 229, 255, 120});
+                drawFilledRoundRect(cardX, curCardY, cardW, cardH, cardR, {32, 32, 38, 245});
+                drawRoundRect(cardX, curCardY, cardW, cardH, cardR, {255, 255, 255, 255});
+                drawRoundRect(cardX - 1, curCardY - 1, cardW + 2, cardH + 2, cardR, {255, 255, 255, 120});
 
                 drawText(card.line1, cardX + 16, curCardY + 11, {255, 255, 255, 255}, m_fontNormal);
-                drawText(card.line2, cardX + 16, curCardY + 38, {110, 220, 240, 255}, m_fontSmall);
+                drawText(card.line2, cardX + 16, curCardY + 38, {200, 200, 210, 255}, m_fontSmall);
             } else {
-                drawFilledRoundRect(cardX, curCardY, cardW, cardH, cardR, {25, 33, 48, 180});
-                drawRoundRect(cardX, curCardY, cardW, cardH, cardR, {48, 60, 84, 150});
+                drawFilledRoundRect(cardX, curCardY, cardW, cardH, cardR, {16, 16, 20, 200});
+                drawRoundRect(cardX, curCardY, cardW, cardH, cardR, {36, 36, 44, 140});
 
-                drawText(card.line1, cardX + 16, curCardY + 11, {225, 235, 245, 255}, m_fontNormal);
-                drawText(card.line2, cardX + 16, curCardY + 38, {140, 155, 175, 255}, m_fontSmall);
+                drawText(card.line1, cardX + 16, curCardY + 11, {225, 225, 235, 255}, m_fontNormal);
+                drawText(card.line2, cardX + 16, curCardY + 38, {140, 145, 155, 255}, m_fontSmall);
             }
 
             curCardY += cardH + cardGap;
         }
     }
+
+    // 5. Bottom Navigation & Action Prompts Bar
+    int barY = SCREEN_H - 42;
+    drawFilledRoundRect(55, barY - 4, SCREEN_W - 110, 36, 10, {10, 10, 14, 230});
+    drawRoundRect(55, barY - 4, SCREEN_W - 110, 36, 10, {32, 36, 46, 160});
+
+    std::string promptStr = "[A] Play Stream    [B] Back    [X] Bookmark";
+    if (m_detailFromStreamAndCatalogAddon) {
+        promptStr += "    [Y] " + std::string(m_detailShowAllAddons ? "Source Only" : "All Sources");
+    }
+    drawTextCentered(promptStr, SCREEN_W / 2, barY + 3, TEXT_SECONDARY, m_fontSmall);
 }
 
 void App::renderLibrary() {
-    drawText("Library", 40, 20, ACCENT, m_fontLarge);
-    drawText("[B] Back", 40, 55, TEXT_SECONDARY, m_fontSmall);
+    drawTopNavBar();
 
     auto items = m_library.getRecentlyWatched(20);
     if (items.empty()) {
@@ -4217,38 +4849,7 @@ void App::renderLibrary() {
 
 void App::renderAddons() {
     // 1. Top Brand Logo & Navigation
-    drawText("SwitchStream", 40, 18, TEXT_PRIMARY, m_fontLarge);
-
-    int navX = 280, navY = 14, navW = 580, navH = 40;
-    drawFilledRoundRect(navX, navY, navW, navH, 20, NAV_CONTAINER);
-    drawRoundRect(navX, navY, navW, navH, 20, NAV_BORDER);
-
-    // Nav pills
-    int tab0X = navX + 4, tab0W = 96;
-    drawTextCentered("Home", tab0X + tab0W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
-
-    int tab1X = navX + 104, tab1W = 110;
-    drawTextCentered("Search [Y]", tab1X + tab1W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
-
-    int tab2X = navX + 218, tab2W = 110;
-    drawTextCentered("Library [L]", tab2X + tab2W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
-
-    int tab3X = navX + 332, tab3W = 110;
-    drawFilledRoundRect(tab3X, navY + 4, tab3W, navH - 8, 16, ACCENT);
-    int pzX = tab3X + 14, pzY = navY + 12;
-    drawFilledRect(pzX, pzY, 6, 6, {10, 14, 22, 255});
-    drawFilledRect(pzX + 8, pzY, 6, 6, {10, 14, 22, 255});
-    drawFilledRect(pzX, pzY + 8, 6, 6, {10, 14, 22, 255});
-    drawFilledRect(pzX + 8, pzY + 8, 6, 6, {10, 14, 22, 255});
-    drawText("Addons", tab3X + 35, navY + 9, {10, 14, 22, 255}, m_fontNormal);
-
-    int tab4X = navX + 446, tab4W = 126;
-    drawTextCentered("Settings [X]", tab4X + tab4W / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
-
-    // Right exit badge
-    drawFilledRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {26, 32, 46, 200});
-    drawRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {44, 52, 74, 180});
-    drawTextCentered("[+] Exit", SCREEN_W - 85, 23, TEXT_SECONDARY, m_fontSmall);
+    drawTopNavBar();
 
     auto addons = m_addonManager.getAddons();
     int installedCount = (int)addons.size();
@@ -4305,7 +4906,7 @@ void App::renderAddons() {
             drawFilledRoundRect(x, y, cardW, cardH, 14, sel ? CARD_HL : CARD_COLOR);
             drawRoundRect(x, y, cardW, cardH, 14, sel ? ACCENT : SDL_Color{255, 255, 255, 22});
             if (sel) {
-                drawRoundRect(x - 1, y - 1, cardW + 2, cardH + 2, 15, {0, 229, 255, 90});
+                drawRoundRect(x - 1, y - 1, cardW + 2, cardH + 2, 15, {255, 255, 255, 90});
             }
 
             std::string name, desc, ver, catLabel, badgeTag;
@@ -4375,9 +4976,20 @@ void App::renderAddons() {
             int pillW = 68, pillH = 22;
             int pillX = x + cardW - 16 - pillW;
             int pillY = y + 16;
+            bool isLocalAddon = (m_addonTab == 0 && (addons[i].manifest.id == "local-media" || addons[i].transportUrl == "local://media" || addons[i].manifest.id == "local"));
 
             if (m_addonTab == 0) {
-                if (isActive) {
+                if (isLocalAddon) {
+                    if (isActive) {
+                        drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {20, 65, 38, 220});
+                        drawRoundRect(pillX, pillY, pillW, pillH, 11, {45, 190, 85, 200});
+                        drawTextCentered("Active", pillX + pillW / 2, pillY + 3, {70, 240, 130, 255}, m_fontSmall);
+                    } else {
+                        drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {36, 38, 48, 220});
+                        drawRoundRect(pillX, pillY, pillW, pillH, 11, {100, 105, 120, 160});
+                        drawTextCentered("Disabled", pillX + pillW / 2, pillY + 3, {150, 155, 170, 255}, m_fontSmall);
+                    }
+                } else if (isActive) {
                     drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {20, 65, 38, 220});
                     drawRoundRect(pillX, pillY, pillW, pillH, 11, {45, 190, 85, 200});
                     drawTextCentered("Active", pillX + pillW / 2, pillY + 3, {70, 240, 130, 255}, m_fontSmall);
@@ -4388,13 +5000,13 @@ void App::renderAddons() {
                 }
             } else {
                 if (isInstalled) {
-                    drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {15, 55, 65, 220});
-                    drawRoundRect(pillX, pillY, pillW, pillH, 11, {0, 194, 203, 200});
+                    drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {26, 26, 32, 220});
+                    drawRoundRect(pillX, pillY, pillW, pillH, 11, {60, 60, 70, 200});
                     drawTextCentered("Installed", pillX + pillW / 2, pillY + 3, ACCENT, m_fontSmall);
                 } else {
-                    drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {25, 40, 75, 220});
-                    drawRoundRect(pillX, pillY, pillW, pillH, 11, {60, 110, 220, 180});
-                    drawTextCentered("Available", pillX + pillW / 2, pillY + 3, {130, 180, 255, 255}, m_fontSmall);
+                    drawFilledRoundRect(pillX, pillY, pillW, pillH, 11, {22, 22, 26, 220});
+                    drawRoundRect(pillX, pillY, pillW, pillH, 11, {50, 50, 60, 180});
+                    drawTextCentered("Available", pillX + pillW / 2, pillY + 3, {200, 200, 210, 255}, m_fontSmall);
                 }
             }
 
@@ -4417,18 +5029,23 @@ void App::renderAddons() {
             int btnY = y + cardH - 42;
             int btnW = cardW - 32;
             int btnH = 30;
-            drawFilledRoundRect(x + 16, btnY, btnW, btnH, 8, {26, 32, 46, 240});
-            drawRoundRect(x + 16, btnY, btnW, btnH, 8, {52, 64, 90, 200});
+            drawFilledRoundRect(x + 16, btnY, btnW, btnH, 8, {22, 22, 26, 240});
+            drawRoundRect(x + 16, btnY, btnW, btnH, 8, {45, 45, 52, 200});
 
             if (m_addonTab == 0) {
-                // Divider in center
-                drawFilledRect(x + 16 + btnW / 2, btnY + 5, 1, btnH - 10, {52, 64, 90, 200});
-                std::string toggleTxt = isActive ? "[A] Disable" : "[A] Enable";
-                drawTextCentered(toggleTxt, x + 16 + btnW / 4, btnY + 7, sel ? ACCENT : TEXT_PRIMARY, m_fontSmall);
-                drawTextCentered("[X] Uninstall", x + 16 + 3 * btnW / 4, btnY + 7, {255, 110, 110, 255}, m_fontSmall);
+                if (isLocalAddon) {
+                    std::string toggleTxt = isActive ? "[A] Disable" : "[A] Enable";
+                    drawTextCentered(toggleTxt, x + 16 + btnW / 2, btnY + 7, sel ? ACCENT : TEXT_PRIMARY, m_fontSmall);
+                } else {
+                    // Divider in center
+                    drawFilledRect(x + 16 + btnW / 2, btnY + 5, 1, btnH - 10, {45, 45, 52, 200});
+                    std::string toggleTxt = isActive ? "[A] Disable" : "[A] Enable";
+                    drawTextCentered(toggleTxt, x + 16 + btnW / 4, btnY + 7, sel ? ACCENT : TEXT_PRIMARY, m_fontSmall);
+                    drawTextCentered("[X] Uninstall", x + 16 + 3 * btnW / 4, btnY + 7, {255, 110, 110, 255}, m_fontSmall);
+                }
             } else {
                 if (isInstalled) {
-                    drawFilledRect(x + 16 + btnW / 2, btnY + 5, 1, btnH - 10, {52, 64, 90, 200});
+                    drawFilledRect(x + 16 + btnW / 2, btnY + 5, 1, btnH - 10, {45, 45, 52, 200});
                     drawTextCentered("Installed", x + 16 + btnW / 4, btnY + 7, {70, 240, 130, 255}, m_fontSmall);
                     drawTextCentered("[X] Uninstall", x + 16 + 3 * btnW / 4, btnY + 7, {255, 110, 110, 255}, m_fontSmall);
                 } else {
@@ -4448,7 +5065,7 @@ void App::renderAddons() {
         int modalW = 460, modalH = 140;
         int modalX = (SCREEN_W - modalW) / 2;
         int modalY = (SCREEN_H - modalH) / 2;
-        drawFilledRoundRect(modalX, modalY, modalW, modalH, 16, {20, 26, 38, 250});
+        drawFilledRoundRect(modalX, modalY, modalW, modalH, 16, {18, 18, 22, 250});
         drawRoundRect(modalX, modalY, modalW, modalH, 16, ACCENT);
 
         drawSpinner(modalX + modalW / 2, modalY + 45, 20);
@@ -4458,8 +5075,8 @@ void App::renderAddons() {
 }
 
 void App::renderSettings() {
-    drawText("System Settings", 40, 20, ACCENT, m_fontLarge);
-    drawText("[Up/Down] Navigate   [A] Change/Toggle   [B] Back to Home", 40, 55, TEXT_SECONDARY, m_fontSmall);
+    drawTopNavBar();
+    drawText("[Up/Down] Navigate   [A] Change/Toggle   [B] Back to Home", 40, 62, TEXT_SECONDARY, m_fontSmall);
 
     int panelX = 40;
     int panelY = 88;
@@ -4487,10 +5104,10 @@ void App::renderSettings() {
     };
 
     if (m_addonManager.getShowResourceMonitor()) {
-        options.push_back({5, "  ↳ Show RAM Usage", "Toggle physical memory consumption in HUD.", m_addonManager.getShowRamUsage() ? "ON" : "OFF", true});
-        options.push_back({6, "  ↳ Show Cache Usage", "Toggle image, log, and catalog cache size in HUD.", m_addonManager.getShowCacheUsage() ? "ON" : "OFF", true});
-        options.push_back({7, "  ↳ Show CPU Usage", "Toggle processor usage indicator in HUD.", m_addonManager.getShowCpuUsage() ? "ON" : "OFF", true});
-        options.push_back({8, "  ↳ Show Data Usage", "Toggle cumulative network data transfer in HUD.", m_addonManager.getShowDataUsage() ? "ON" : "OFF", true});
+        options.push_back({5, "Show RAM Usage", "Toggle physical memory consumption in HUD.", m_addonManager.getShowRamUsage() ? "ON" : "OFF", true});
+        options.push_back({6, "Show Cache Usage", "Toggle image, log, and catalog cache size in HUD.", m_addonManager.getShowCacheUsage() ? "ON" : "OFF", true});
+        options.push_back({7, "Show CPU Usage", "Toggle processor usage indicator in HUD.", m_addonManager.getShowCpuUsage() ? "ON" : "OFF", true});
+        options.push_back({8, "Show Data Usage", "Toggle cumulative network data transfer in HUD.", m_addonManager.getShowDataUsage() ? "ON" : "OFF", true});
     }
 
     options.push_back({9, "Clean Storage & Cache", m_cachedCacheSizeStr, "Press [A] to Manage", false});
@@ -4521,7 +5138,7 @@ void App::renderSettings() {
         drawText(options[i].description, panelX + indentX + 20, itemY + (options[i].isSubItem ? 32 : 40), TEXT_SECONDARY, m_fontSmall);
 
         if (!options[i].value.empty()) {
-            SDL_Color valColor = sel ? SDL_Color{255, 255, 255, 255} : SDL_Color{150, 180, 255, 255};
+            SDL_Color valColor = sel ? SDL_Color{255, 255, 255, 255} : SDL_Color{190, 190, 200, 255};
             drawText(options[i].value, panelX + panelW - 320, itemY + (options[i].isSubItem ? 16 : 22), valColor, m_fontNormal);
         }
 
@@ -4536,7 +5153,7 @@ void App::renderSettings() {
         int modalX = (SCREEN_W - modalW) / 2;
         int modalY = (SCREEN_H - modalH) / 2;
 
-        drawFilledRoundRect(modalX, modalY, modalW, modalH, 16, {20, 26, 38, 252});
+        drawFilledRoundRect(modalX, modalY, modalW, modalH, 16, {18, 18, 22, 252});
         drawRoundRect(modalX, modalY, modalW, modalH, 16, ACCENT);
 
         drawText("Clean Storage & Cache", modalX + 35, modalY + 25, ACCENT, m_fontLarge);
@@ -4577,22 +5194,22 @@ void App::renderSettings() {
                 drawFilledRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, CARD_HL);
                 drawRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, ACCENT);
             } else {
-                drawFilledRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, {28, 34, 48, 200});
-                drawRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, {50, 60, 80, 180});
+                drawFilledRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, {24, 24, 28, 200});
+                drawRoundRect(modalX + 35, rowY - 4, rowW, rowH, 8, {45, 45, 52, 180});
             }
 
             // Checkbox box
             int boxX = modalX + 50, boxY = rowY + 6, boxS = 22;
             if (clearItems[i].checked) {
                 drawFilledRoundRect(boxX, boxY, boxS, boxS, 5, ACCENT);
-                drawTextCentered("X", boxX + boxS / 2, boxY + 2, {10, 14, 22, 255}, m_fontSmall);
+                drawTextCentered("X", boxX + boxS / 2, boxY + 2, {14, 14, 16, 255}, m_fontSmall);
             } else {
                 drawRoundRect(boxX, boxY, boxS, boxS, 5, {120, 130, 150, 200});
             }
 
             drawText(clearItems[i].label, boxX + boxS + 16, rowY + 8, isFocused ? ACCENT : TEXT_PRIMARY, m_fontNormal);
             std::string sizeStr = formatBytes(clearItems[i].bytes);
-            drawText(sizeStr, modalX + modalW - 60 - (int)sizeStr.size() * 9, rowY + 8, {150, 220, 255, 255}, m_fontNormal);
+            drawText(sizeStr, modalX + modalW - 60 - (int)sizeStr.size() * 9, rowY + 8, {220, 220, 230, 255}, m_fontNormal);
 
             rowY += 56;
         }
@@ -4607,8 +5224,8 @@ void App::renderSettings() {
 
         int btn2W = 160;
         int btn2X = modalX + modalW - 50 - btn2W;
-        drawFilledRoundRect(btn2X, btnY, btn2W, btnH, 8, {36, 44, 62, 220});
-        drawRoundRect(btn2X, btnY, btn2W, btnH, 8, {70, 84, 115, 255});
+        drawFilledRoundRect(btn2X, btnY, btn2W, btnH, 8, {26, 26, 32, 220});
+        drawRoundRect(btn2X, btnY, btn2W, btnH, 8, {55, 55, 65, 255});
         drawTextCentered("[B] Cancel", btn2X + btn2W / 2, btnY + 9, TEXT_SECONDARY, m_fontSmall);
 
         drawTextCentered("[Up/Down] Navigate   [A] Toggle   [X] Clean   [B] Cancel",
@@ -4742,36 +5359,75 @@ void App::renderResourceHUD() {
         hudStr += parts[i];
     }
 
-    int hudW = (int)hudStr.size() * 7 + 24;
+    int textW = 0, textH = 0;
+    TTF_SizeUTF8(m_fontSmall, hudStr.c_str(), &textW, &textH);
+    int hudW = textW + 24;
     int hudH = 24;
-    int hudX = SCREEN_W - hudW - 24;
+    int hudX = SCREEN_W - hudW - 20;
     int hudY = SCREEN_H - 31; // Centered inside the 38px bottom navbar
 
-    if (m_screen == Screen::PLAYER) {
-        hudX = SCREEN_W - hudW - 24;
-        hudY = SCREEN_H - 31;
+    drawFilledRoundRect(hudX, hudY, hudW, hudH, 12, {20, 20, 24, 230});
+    drawRoundRect(hudX, hudY, hudW, hudH, 12, {50, 50, 60, 160});
+    drawTextCentered(hudStr, hudX + hudW / 2, hudY + 3, {230, 230, 235, 255}, m_fontSmall);
+}
+
+void App::drawTopNavBar() {
+    // 1. Brand Logo
+    drawText("SwitchStream", 32, 18, TEXT_PRIMARY, m_fontLarge);
+
+    // 2. Top Navigation Pill Bar
+    int navX = 220, navY = 14, navW = 570, navH = 40;
+    drawFilledRoundRect(navX, navY, navW, navH, 20, NAV_CONTAINER);
+    drawRoundRect(navX, navY, navW, navH, 20, NAV_BORDER);
+
+    struct NavTab {
+        std::string label;
+        int width;
+        Screen targetScreen;
+    };
+
+    const std::vector<NavTab> tabs = {
+        {"Home",         84,  Screen::HOME},
+        {"Search [Y]",   114, Screen::SEARCH},
+        {"Library [L]",  114, Screen::LIBRARY},
+        {"Addons [R]",   114, Screen::ADDONS},
+        {"Settings [X]", 124, Screen::SETTINGS}
+    };
+
+    int curX = navX + 4;
+    for (const auto& tab : tabs) {
+        bool active = (m_screen == tab.targetScreen);
+        if (active) {
+            drawFilledRoundRect(curX, navY + 4, tab.width, navH - 8, 16, ACCENT);
+            drawTextCentered(tab.label, curX + tab.width / 2, navY + 9, {14, 14, 16, 255}, m_fontNormal);
+        } else {
+            drawTextCentered(tab.label, curX + tab.width / 2, navY + 9, TEXT_SECONDARY, m_fontNormal);
+        }
+        curX += tab.width + 4;
     }
 
-    drawFilledRoundRect(hudX, hudY, hudW, hudH, 12, {18, 24, 38, 225});
-    drawRoundRect(hudX, hudY, hudW, hudH, 12, {40, 160, 200, 140});
-    drawTextCentered(hudStr, hudX + hudW / 2, hudY + 3, {225, 240, 255, 255}, m_fontSmall);
+    // Right quick exit badge
+    drawFilledRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {24, 24, 28, 200});
+    drawRoundRect(SCREEN_W - 130, 18, 90, 32, 16, {44, 44, 52, 180});
+    drawTextCentered("[+] Exit", SCREEN_W - 85, 23, TEXT_SECONDARY, m_fontSmall);
 }
+
 
 void App::drawNavBar() {
     int barY = SCREEN_H - 38;
     int barH = 38;
 
     // Background bar
-    drawFilledRect(0, barY, SCREEN_W, barH, {12, 16, 24, 245});
-    drawFilledRect(0, barY, SCREEN_W, 1, {32, 40, 58, 255}); // 1px subtle top border
+    drawFilledRect(0, barY, SCREEN_W, barH, {10, 10, 12, 250});
+    drawFilledRect(0, barY, SCREEN_W, 1, NAV_BORDER);
 
     auto drawBtnPrompt = [this](const std::string& btn, const std::string& label, int x, int y) -> int {
         int btnW = std::max(22, (int)btn.size() * 10 + 10);
         int btnH = 20;
         // Button pill
-        drawFilledRoundRect(x, y - 2, btnW, btnH, btnH / 2, {36, 44, 62, 255});
-        drawRoundRect(x, y - 2, btnW, btnH, btnH / 2, {60, 72, 98, 255});
-        drawTextCentered(btn, x + btnW / 2, y, {240, 245, 255, 255}, m_fontSmall);
+        drawFilledRoundRect(x, y - 2, btnW, btnH, btnH / 2, {26, 26, 32, 255});
+        drawRoundRect(x, y - 2, btnW, btnH, btnH / 2, {55, 55, 65, 255});
+        drawTextCentered(btn, x + btnW / 2, y, {240, 240, 245, 255}, m_fontSmall);
 
         // Label
         drawText(label, x + btnW + 7, y, TEXT_SECONDARY, m_fontSmall);
@@ -4934,8 +5590,8 @@ void App::drawAddonIcon(int x, int y, int size, const std::string& name, const s
         drawFilledRect(cx - 15, cy - 14, 8, 6, silver);
         drawFilledRect(cx + 7, cy - 14, 8, 6, silver);
 
-        // Magnetic spark dots/arcs (Cyan)
-        SDL_Color spark = {0, 229, 255, 240};
+        // Magnetic spark dots/arcs (White/Silver)
+        SDL_Color spark = {240, 240, 245, 240};
         drawFilledRect(cx - 13, cy - 19, 4, 3, spark);
         drawFilledRect(cx + 9, cy - 19, 4, 3, spark);
         drawFilledRect(cx - 2, cy - 21, 4, 3, spark);
@@ -5027,8 +5683,8 @@ void App::drawAddonIcon(int x, int y, int size, const std::string& name, const s
         drawFilledRect(cx - 3, cy + 10, 6, 4, {70, 120, 200, 255});
         drawFilledRect(cx - 8, cy + 14, 16, 2, {70, 120, 200, 255});
 
-        // Green/Cyan Play Triangle
-        SDL_Color playCol = {0, 229, 255, 255};
+        // White Play Triangle
+        SDL_Color playCol = {255, 255, 255, 255};
         for (int p = 0; p < 8; ++p) {
             drawFilledRect(cx - 4 + p, cy - 7 + p, 2, 14 - p * 2, playCol);
         }
@@ -5172,81 +5828,71 @@ void App::maskRoundedCorners(int x, int y, int w, int h, int r, SDL_Color bgColo
     }
 }
 
-static void drawFilledCircle(SDL_Renderer* renderer, int cx, int cy, int radius, SDL_Color color) {
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
-    for (int dy = -radius; dy <= radius; dy++) {
-        int dx = (int)sqrt(radius * radius - dy * dy);
-        SDL_RenderDrawLine(renderer, cx - dx, cy + dy, cx + dx, cy + dy);
-    }
-}
-
-static void drawFilledSector(SDL_Renderer* renderer, int cx, int cy, int radius, double startAngle, double endAngle, SDL_Color color) {
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, color.r, color.g, color.b, color.a);
-    
-    // Normalize angles to [0, 2*PI]
-    while (startAngle < 0) startAngle += 2 * M_PI;
-    while (startAngle >= 2 * M_PI) startAngle -= 2 * M_PI;
-    while (endAngle < 0) endAngle += 2 * M_PI;
-    while (endAngle >= 2 * M_PI) endAngle -= 2 * M_PI;
-
-    bool crossZero = (startAngle > endAngle);
-
-    for (int y = -radius; y <= radius; y++) {
-        for (int x = -radius; x <= radius; x++) {
-            int distSq = x * x + y * y;
-            if (distSq <= radius * radius) {
-                if (distSq == 0) {
-                    SDL_RenderDrawPoint(renderer, cx, cy);
-                    continue;
-                }
-                double angle = atan2(y, x);
-                if (angle < 0) angle += 2 * M_PI;
-
-                bool inSector = false;
-                if (!crossZero) {
-                    inSector = (angle >= startAngle && angle <= endAngle);
-                } else {
-                    inSector = (angle >= startAngle || angle <= endAngle);
-                }
-
-                if (inSector) {
-                    SDL_RenderDrawPoint(renderer, cx + x, cy + y);
-                }
-            }
-        }
-    }
-}
-
 void App::drawSpinner(int cx, int cy, int radius) {
-    // 1. Draw base semi-transparent circle
-    SDL_Color baseColor = {100, 200, 255, 45};
-    drawFilledCircle(m_renderer, cx, cy, radius, baseColor);
+    // Directly renders the user's 3D glowing pill asset
+    // Aspect ratio of the pill asset is 205 x 136 (~1.507 : 1)
+    int baseH = std::max(22, (int)(radius * 1.9));
+    int baseW = (int)(baseH * (205.0 / 136.0));
 
-    // 2. Draw rotating sector (slightly larger radius)
     double time = SDL_GetTicks() / 1000.0;
-    double speed = 6.0; // rotation speed
-    double startAngle = time * speed;
-    double span = 75.0 * M_PI / 180.0; // 75 degrees span
-    double endAngle = startAngle + span;
+    // Elegant smooth breathing pulse in scale (0.94 - 1.06)
+    double pulse = std::sin(time * 3.5);
+    double scale = 1.0 + 0.06 * pulse;
+    int pillW = (int)(baseW * scale);
+    int pillH = (int)(baseH * scale);
 
-    int sectorR = radius + 3;
-    if (sectorR < 5) sectorR = 5;
+    // Centered directly at (cx, cy) with subtle organic vertical hover
+    int renderX = cx - pillW / 2;
+    int renderY = cy - pillH / 2 + (int)(std::sin(time * 3.0) * 2.0);
 
-    SDL_Color sectorColor = {0, 180, 255, 230};
-    drawFilledSector(m_renderer, cx, cy, sectorR, startAngle, endAngle, sectorColor);
+    // Subtle breathing in opacity (190 - 255)
+    Uint8 alpha = (Uint8)(222 + 33 * pulse);
+
+    if (m_pillTexture) {
+        SDL_SetTextureAlphaMod(m_pillTexture, alpha);
+        SDL_Rect dst = {renderX, renderY, pillW, pillH};
+        SDL_RenderCopy(m_renderer, m_pillTexture, nullptr, &dst);
+        SDL_SetTextureAlphaMod(m_pillTexture, 255);
+    } else {
+        // High-precision vector fallback: pure white pill with soft layered ambient shadow
+        int r = pillH / 2;
+        drawFilledRoundRect(renderX - 2, renderY + 4, pillW + 4, pillH, r, {0, 0, 0, 70});
+        drawFilledRoundRect(renderX, renderY + 2, pillW, pillH, r, {0, 0, 0, 120});
+        drawFilledRoundRect(renderX, renderY, pillW, pillH, r, {255, 255, 255, alpha});
+        drawRoundRect(renderX, renderY, pillW, pillH, r, {255, 255, 255, 200});
+    }
 }
 
 void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
+    auto drawFallbackCard = [&]() {
+        // Base dark card
+        drawFilledRoundRect(x, y, w, h, 8, {18, 18, 22, 255});
+        drawRoundRect(x, y, w, h, 8, {38, 38, 44, 180});
+
+        // Center media badge circle
+        int circleSize = std::min(44, w / 3);
+        drawFilledRoundRect(x + w / 2 - circleSize / 2, y + h / 2 - circleSize / 2 - 12, circleSize, circleSize, circleSize / 2, {28, 28, 34, 255});
+        const char* icon = (item.type == "series" || item.type == "tv") ? "📺" : "🎬";
+        drawTextCentered(icon, x + w / 2, y + h / 2 - 18, TEXT_PRIMARY, m_fontNormal);
+
+        // Top tag (e.g. S01E01 or Year or type)
+        if (!item.releaseInfo.empty()) {
+            int tagW = (int)item.releaseInfo.size() * 8 + 12;
+            int tagH = 18;
+            drawFilledRoundRect(x + w - tagW - 6, y + 6, tagW, tagH, 4, {255, 255, 255, 220});
+            drawTextCentered(item.releaseInfo, x + w - tagW / 2 - 6, y + 8, {14, 14, 16, 255}, m_fontSmall);
+        }
+
+        // Bottom title container
+        int titleBoxH = std::min(42, h / 4);
+        drawFilledRoundRect(x + 2, y + h - titleBoxH - 2, w - 4, titleBoxH, 6, {12, 12, 14, 220});
+        std::string disp = item.name;
+        if (disp.size() > 16) disp = disp.substr(0, 14) + "..";
+        drawTextCentered(disp, x + w / 2, y + h - titleBoxH + 4, TEXT_PRIMARY, m_fontSmall);
+    };
+
     if (item.poster.empty()) {
-        drawFilledRoundRect(x, y, w, h, 8, CARD_COLOR);
-        drawRoundRect(x, y, w, h, 8, {38, 46, 64, 180});
-        drawFilledRoundRect(x + w / 2 - 20, y + h / 2 - 24, 40, 40, 8, {32, 40, 58, 255});
-        drawTextCentered("🎬", x + w / 2, y + h / 2 - 14, TEXT_SECONDARY, m_fontNormal);
-        std::string sub = item.name;
-        if (sub.size() > 14) sub = sub.substr(0, 12) + "..";
-        drawTextCentered(sub, x + w / 2, y + h / 2 + 20, TEXT_SECONDARY, m_fontSmall);
+        drawFallbackCard();
         return;
     }
 
@@ -5282,11 +5928,7 @@ void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
     }
 
     if (isFailed) {
-        drawFilledRoundRect(x, y, w, h, 8, CARD_COLOR);
-        drawRoundRect(x, y, w, h, 8, {38, 46, 64, 180});
-        drawFilledRoundRect(x + w / 2 - 20, y + h / 2 - 24, 40, 40, 8, {32, 40, 58, 255});
-        drawTextCentered("🎬", x + w / 2, y + h / 2 - 14, TEXT_SECONDARY, m_fontNormal);
-        drawTextCentered("No Poster", x + w / 2, y + h / 2 + 20, TEXT_SECONDARY, m_fontSmall);
+        drawFallbackCard();
         return;
     }
 
@@ -5308,7 +5950,11 @@ void App::drawPoster(const MetaItem& item, int x, int y, int w, int h) {
                 }
             }
             if (!alreadyQueued) {
-                m_downloadQueue.push_back({item.poster, titleKey});
+                if (item.poster.rfind("local-lookup:", 0) == 0 || item.poster[0] == '/' || item.poster.rfind("sdmc:", 0) == 0) {
+                    m_downloadQueue.insert(m_downloadQueue.begin(), {item.poster, titleKey});
+                } else {
+                    m_downloadQueue.push_back({item.poster, titleKey});
+                }
                 m_downloadQueueCV.notify_one();
             }
         }
@@ -5348,22 +5994,47 @@ std::string App::getDiskCachePath(const std::string& key) {
 }
 
 bool App::readDiskCache(const std::string& path, std::string& outData) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f.is_open()) return false;
-    f.seekg(0, std::ios::end);
-    std::streampos sz = f.tellg();
-    if (sz <= 0 || sz > 10 * 1024 * 1024) return false;
-    f.seekg(0, std::ios::beg);
+    if (path.empty()) return false;
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) {
+        if (path.rfind("sdmc:", 0) == 0) {
+            std::string alt = path.substr(5);
+            fp = fopen(alt.c_str(), "rb");
+        } else if (path[0] == '/') {
+            std::string alt = "sdmc:" + path;
+            fp = fopen(alt.c_str(), "rb");
+        }
+    }
+    if (!fp) return false;
+    fseek(fp, 0, SEEK_END);
+    long sz = ftell(fp);
+    if (sz <= 0 || sz > 15 * 1024 * 1024) {
+        fclose(fp);
+        return false;
+    }
+    fseek(fp, 0, SEEK_SET);
     outData.resize(static_cast<size_t>(sz));
-    f.read(&outData[0], sz);
-    return f.good();
+    size_t readBytes = fread(&outData[0], 1, sz, fp);
+    fclose(fp);
+    return readBytes == static_cast<size_t>(sz);
 }
 
 void App::writeDiskCache(const std::string& path, const std::string& data) {
-    if (data.empty()) return;
-    std::ofstream f(path, std::ios::binary);
-    if (!f.is_open()) return;
-    f.write(data.data(), data.size());
+    if (path.empty() || data.empty()) return;
+    FILE* fp = fopen(path.c_str(), "wb");
+    if (!fp) {
+        if (path.rfind("sdmc:", 0) == 0) {
+            std::string alt = path.substr(5);
+            fp = fopen(alt.c_str(), "wb");
+        } else if (path[0] == '/') {
+            std::string alt = "sdmc:" + path;
+            fp = fopen(alt.c_str(), "wb");
+        }
+    }
+    if (fp) {
+        fwrite(data.data(), 1, data.size(), fp);
+        fclose(fp);
+    }
 }
 
 void App::prequeuePosters(const std::vector<CatalogRow>& rows, int maxRows) {
@@ -5463,6 +6134,7 @@ bool App::loadHomeCache(const std::string& path, std::vector<CatalogRow>& outCat
                 if (m.HasMember("poster") && m["poster"].IsString()) item.poster = m["poster"].GetString();
                 if (m.HasMember("releaseInfo") && m["releaseInfo"].IsString()) item.releaseInfo = m["releaseInfo"].GetString();
                 if (m.HasMember("imdbRating") && m["imdbRating"].IsString()) item.imdbRating = m["imdbRating"].GetString();
+                if (item.addonName.empty()) item.addonName = row.addonName;
                 row.items.push_back(std::move(item));
             }
         }
@@ -5495,8 +6167,15 @@ void App::downloadWorkerLoop() {
         std::string imgData;
         bool loadedFromDisk = false;
 
+        // 0. Check direct local file path (for local media posters)
+        if (!loadedFromDisk && !job.url.empty() && (job.url[0] == '/' || job.url.rfind("sdmc:", 0) == 0)) {
+            if (readDiskCache(job.url, imgData)) {
+                loadedFromDisk = true;
+            }
+        }
+
         // 1. Check title-based disk cache first!
-        if (!titleCacheFile.empty() && readDiskCache(titleCacheFile, imgData)) {
+        if (!loadedFromDisk && !titleCacheFile.empty() && readDiskCache(titleCacheFile, imgData)) {
             loadedFromDisk = true;
         }
 
@@ -5505,17 +6184,82 @@ void App::downloadWorkerLoop() {
             loadedFromDisk = true;
         }
 
-        // 3. If not on disk, download via HTTP with 10s timeout using dedicated image client
-        if (!loadedFromDisk && !job.url.empty()) {
-            auto resp = m_imageHttp.downloadBytes(job.url, 10);
-            if (resp.ok() && resp.body.size() >= 128) {
-                imgData = std::move(resp.body);
-                // Save to disk by title key AND url key so next load instantly hits disk cache!
-                if (!titleCacheFile.empty()) {
-                    writeDiskCache(titleCacheFile, imgData);
+        // 3. Online lookup for local videos: local-lookup:type:query
+        if (!loadedFromDisk && job.url.rfind("local-lookup:", 0) == 0) {
+            std::string rem = job.url.substr(13); // after "local-lookup:"
+            size_t colon = rem.find(':');
+            std::string qType = "movie";
+            std::string qTitle = rem;
+            if (colon != std::string::npos) {
+                qType = rem.substr(0, colon);
+                qTitle = rem.substr(colon + 1);
+            }
+            if (qType != "series") qType = "movie";
+
+            auto doCinemetaLookup = [&](const std::string& type, const std::string& title) -> std::string {
+                std::string encTitle;
+                for (char c : title) {
+                    if (isalnum((unsigned char)c)) encTitle += c;
+                    else if (c == ' ') encTitle += "%20";
+                    else {
+                        char hbuf[4];
+                        snprintf(hbuf, sizeof(hbuf), "%%%02X", (unsigned char)c);
+                        encTitle += hbuf;
+                    }
                 }
-                if (!urlCacheFile.empty()) {
-                    writeDiskCache(urlCacheFile, imgData);
+                std::string metaUrl = "https://v3-cinemeta.strem.io/catalog/" + type + "/top/search=" + encTitle + ".json";
+                printf("[LocalLookup] Querying Cinemeta for '%s' (%s)...\n", title.c_str(), type.c_str());
+                auto resp = m_imageHttp.get(metaUrl, 8);
+                if (resp.ok()) {
+                    rapidjson::Document doc;
+                    doc.Parse(resp.body.c_str());
+                    if (!doc.HasParseError() && doc.IsObject() && doc.HasMember("metas") && doc["metas"].IsArray()) {
+                        auto arr = doc["metas"].GetArray();
+                        if (arr.Size() > 0 && arr[0].IsObject() && arr[0].HasMember("poster") && arr[0]["poster"].IsString()) {
+                            return arr[0]["poster"].GetString();
+                        }
+                    }
+                }
+                return "";
+            };
+
+            std::string posterUrl = doCinemetaLookup(qType, qTitle);
+            if (posterUrl.empty()) {
+                std::string altType = (qType == "movie") ? "series" : "movie";
+                posterUrl = doCinemetaLookup(altType, qTitle);
+            }
+
+            if (!posterUrl.empty()) {
+                printf("[LocalLookup] Found poster URL: %s, downloading...\n", posterUrl.c_str());
+                auto imgResp = m_imageHttp.downloadBytes(posterUrl, 8);
+                if (imgResp.ok() && imgResp.body.size() >= 128) {
+                    imgData = std::move(imgResp.body);
+                    if (!titleCacheFile.empty()) writeDiskCache(titleCacheFile, imgData);
+                    if (!urlCacheFile.empty()) writeDiskCache(urlCacheFile, imgData);
+                    loadedFromDisk = true;
+                    printf("[LocalLookup] Successfully cached poster (%zu bytes)\n", imgData.size());
+                } else {
+                    printf("[LocalLookup] Failed to download poster image\n");
+                }
+            } else {
+                printf("[LocalLookup] No poster found on Cinemeta for '%s'\n", qTitle.c_str());
+            }
+        }
+
+        // 4. If not on disk, download via HTTP with 4s timeout using dedicated image client
+        if (!loadedFromDisk && !job.url.empty() && job.url.rfind("http", 0) == 0) {
+            // Skip known dead/hanging URLs
+            if (job.url.find("baby-beamup.club/logo.png") == std::string::npos) {
+                auto resp = m_imageHttp.downloadBytes(job.url, 4);
+                if (resp.ok() && resp.body.size() >= 128) {
+                    imgData = std::move(resp.body);
+                    // Save to disk by title key AND url key so next load instantly hits disk cache!
+                    if (!titleCacheFile.empty()) {
+                        writeDiskCache(titleCacheFile, imgData);
+                    }
+                    if (!urlCacheFile.empty()) {
+                        writeDiskCache(urlCacheFile, imgData);
+                    }
                 }
             }
         }
@@ -5532,8 +6276,11 @@ void App::downloadWorkerLoop() {
                 img.data = std::move(imgData);
                 m_downloadedQueue.push_back(std::move(img));
             } else {
-                if (!job.titleKey.empty()) m_failedPosters.insert(job.titleKey);
-                m_failedPosters.insert(job.url);
+                bool isLocal = (job.url.rfind("local-lookup:", 0) == 0);
+                if (!isLocal) {
+                    if (!job.titleKey.empty()) m_failedPosters.insert(job.titleKey);
+                    m_failedPosters.insert(job.url);
+                }
             }
         }
     }
@@ -5593,6 +6340,7 @@ void App::refreshHome() {
         std::lock_guard<std::mutex> lock(m_homeMutex);
         m_homeCatalogs.clear();
     }
+    m_homeDisplayDirty = true;
     loadHomeCatalogs(true);
 }
 
@@ -5635,6 +6383,7 @@ void App::loadHomeCatalogs(bool force) {
                         });
                     m_homeCatalogs.insert(it, std::move(row));
                 }
+                m_homeDisplayDirty = true;
                 prequeuePosters(m_homeCatalogs, 2);
             },
             [this]() {
@@ -5649,23 +6398,442 @@ void App::loadHomeCatalogs(bool force) {
                 prequeuePosters(m_homeCatalogs, 3);
             }
         }
+        m_homeDisplayDirty = true;
         m_loadingHome = false;
     });
 }
 
-std::vector<CatalogRow> App::getHomeDisplayCatalogs() {
-    std::vector<CatalogRow> localCatalogs;
-    {
-        std::lock_guard<std::mutex> lock(m_homeMutex);
-        localCatalogs = m_homeCatalogs;
+static bool fileExists(const std::string& path) {
+    if (path.empty()) return false;
+    if (access(path.c_str(), R_OK) == 0) return true;
+    if (path.rfind("sdmc:", 0) == 0) {
+        return access(path.substr(5).c_str(), R_OK) == 0;
+    } else if (path[0] == '/') {
+        std::string alt = "sdmc:" + path;
+        return access(alt.c_str(), R_OK) == 0;
+    }
+    return false;
+}
+
+static std::string normalizeSdmcPath(const std::string& path) {
+    if (path.rfind("sdmc:", 0) == 0) {
+        return path.substr(5);
+    }
+    return path;
+}
+
+static std::string findSidecarPoster(const std::string& fullPath, const std::string& currentDir) {
+    size_t lastDot = fullPath.rfind('.');
+    std::string baseWithoutExt = (lastDot != std::string::npos) ? fullPath.substr(0, lastDot) : fullPath;
+    const char* exts[] = {".jpg", ".jpeg", ".png", ".webp", ".JPG", ".JPEG", ".PNG", ".WEBP"};
+    for (const char* ext : exts) {
+        std::string cand = baseWithoutExt + ext;
+        if (fileExists(cand)) return cand;
+    }
+    const char* folderFiles[] = {
+        "/poster.jpg", "/poster.png", "/poster.jpeg", "/poster.webp",
+        "/folder.jpg", "/folder.png", "/folder.jpeg", "/folder.webp",
+        "/cover.jpg",  "/cover.png",  "/cover.jpeg",  "/cover.webp",
+        "/Poster.jpg", "/Poster.png", "/Poster.jpeg",
+        "/Folder.jpg", "/Folder.png", "/Folder.jpeg",
+        "/Cover.jpg",  "/Cover.png",  "/Cover.jpeg",
+        "/default.jpg","/default.png"
+    };
+    for (const char* f : folderFiles) {
+        std::string cand = currentDir + f;
+        if (fileExists(cand)) return cand;
     }
 
+    // If only one image exists in currentDir, associate it as poster
+    DIR* pdir = opendir(currentDir.c_str());
+    if (!pdir && currentDir[0] == '/') {
+        std::string alt = "sdmc:" + currentDir;
+        pdir = opendir(alt.c_str());
+    }
+    if (pdir) {
+        struct dirent* pent;
+        std::string foundImg;
+        int imgCount = 0;
+        while ((pent = readdir(pdir)) != nullptr) {
+            if (pent->d_name[0] == '.') continue;
+            std::string pname = pent->d_name;
+            size_t pdot = pname.rfind('.');
+            if (pdot != std::string::npos) {
+                std::string pext = pname.substr(pdot);
+                for (char& c : pext) c = (char)tolower((unsigned char)c);
+                if (pext == ".jpg" || pext == ".png" || pext == ".jpeg" || pext == ".webp") {
+                    foundImg = currentDir + "/" + pname;
+                    imgCount++;
+                }
+            }
+        }
+        closedir(pdir);
+        if (imgCount == 1 && !foundImg.empty() && fileExists(foundImg)) {
+            return foundImg;
+        }
+    }
+    return "";
+}
+
+struct ParsedVideoInfo {
+    std::string searchTitle;
+    std::string cleanName;
+    std::string type; // "movie" or "series"
+    int season = -1;
+    int episode = -1;
+    int year = -1;
+    std::string displayTag; // e.g. "S01E01" or "2024"
+};
+
+static ParsedVideoInfo parseVideoFileName(const std::string& rawFileName) {
+    ParsedVideoInfo info;
+    info.type = "movie";
+
+    std::string filename = rawFileName;
+    size_t lastSlash = filename.find_last_of("/\\");
+    if (lastSlash != std::string::npos) {
+        filename = filename.substr(lastSlash + 1);
+    }
+    size_t dotPos = filename.rfind('.');
+    if (dotPos != std::string::npos) {
+        filename = filename.substr(0, dotPos);
+    }
+
+    std::string text = filename;
+    for (char& c : text) {
+        if (c == '.' || c == '_') c = ' ';
+    }
+
+    std::regex seRegex(R"(\b[sS]([0-9]{1,2})\s*[eE]([0-9]{1,2})\b)");
+    std::smatch m;
+    if (std::regex_search(text, m, seRegex)) {
+        info.type = "series";
+        info.season = std::stoi(m[1].str());
+        info.episode = std::stoi(m[2].str());
+        char buf[16];
+        snprintf(buf, sizeof(buf), "S%02dE%02d", info.season, info.episode);
+        info.displayTag = buf;
+        size_t matchPos = m.position(0);
+        info.searchTitle = text.substr(0, matchPos);
+    } else {
+        std::regex altSeRegex(R"(\b([0-9]{1,2})x([0-9]{1,2})\b)");
+        if (std::regex_search(text, m, altSeRegex)) {
+            info.type = "series";
+            info.season = std::stoi(m[1].str());
+            info.episode = std::stoi(m[2].str());
+            char buf[16];
+            snprintf(buf, sizeof(buf), "S%02dE%02d", info.season, info.episode);
+            info.displayTag = buf;
+            size_t matchPos = m.position(0);
+            info.searchTitle = text.substr(0, matchPos);
+        } else {
+            std::regex yearRegex(R"(\b(19[2-9][0-9]|20[0-3][0-9])\b)");
+            if (std::regex_search(text, m, yearRegex)) {
+                info.type = "movie";
+                info.year = std::stoi(m[1].str());
+                info.displayTag = std::to_string(info.year);
+                size_t matchPos = m.position(0);
+                info.searchTitle = text.substr(0, matchPos);
+            } else {
+                info.searchTitle = text;
+            }
+        }
+    }
+
+    static const std::vector<std::string> junkTags = {
+        "1080p", "720p", "480p", "2160p", "4k", "uhd", "bluray", "bdrip", "brrip",
+        "web-dl", "webrip", "web", "hdrip", "hdtv", "dvdrip", "x264", "x265", "hevc",
+        "h264", "h265", "aac", "ac3", "dts", "repack", "proper", "remux", "amzn",
+        "nf", "dsnp", "galaxytv", "yify", "yts", "subita", "ita", "eng", "multi",
+        "tgx", "complete", "season", "episode", "dual", "hindi", "english", "telugu",
+        "tamil", "torrentgalaxy"
+    };
+
+    std::string cleaned;
+    std::string word;
+    std::istringstream iss(info.searchTitle);
+    while (iss >> word) {
+        while (!word.empty() && (word.front() == '(' || word.front() == '[' || word.front() == '{')) {
+            word.erase(0, 1);
+        }
+        while (!word.empty() && (word.back() == ')' || word.back() == ']' || word.back() == '}')) {
+            word.pop_back();
+        }
+        std::string lowWord = word;
+        for (char& c : lowWord) c = (char)tolower((unsigned char)c);
+
+        bool isJunk = false;
+        for (const auto& tag : junkTags) {
+            if (lowWord == tag) {
+                isJunk = true;
+                break;
+            }
+        }
+        if (!isJunk && !word.empty()) {
+            if (!cleaned.empty()) cleaned += " ";
+            cleaned += word;
+        }
+    }
+
+    while (!cleaned.empty() && (cleaned.back() == '-' || cleaned.back() == ' ' || cleaned.back() == ':')) {
+        cleaned.pop_back();
+    }
+    while (!cleaned.empty() && (cleaned.front() == '-' || cleaned.front() == ' ')) {
+        cleaned.erase(0, 1);
+    }
+
+    if (cleaned.empty()) cleaned = info.searchTitle.empty() ? filename : info.searchTitle;
+    info.searchTitle = cleaned;
+
+    if (!info.displayTag.empty()) {
+        info.cleanName = info.searchTitle + " " + info.displayTag;
+    } else {
+        info.cleanName = info.searchTitle;
+    }
+
+    return info;
+}
+
+std::vector<MetaItem> App::scanLocalVideos() {
+    std::vector<MetaItem> items;
+    std::vector<std::string> searchDirs;
+#ifdef __SWITCH__
+    searchDirs = {
+        "/switch/switchstream/videos",
+        "/switch/videos",
+        "/videos",
+        "/movies"
+    };
+    mkdir("/switch/switchstream/videos", 0777);
+    mkdir("sdmc:/switch/switchstream/videos", 0777);
+#else
+    searchDirs = {
+        "./videos",
+        "videos"
+    };
+    mkdir("videos", 0777);
+#endif
+
+    std::unordered_set<std::string> seenDirs;
+    std::unordered_set<std::string> seenPaths;
+    static const std::unordered_set<std::string> validExts = {
+        ".mp4", ".mkv", ".avi", ".mov", ".webm", ".ts", ".m4v", ".flv", ".wmv", ".iso", ".3gp"
+    };
+
+    std::function<void(const std::string&, int)> scanDirRecursive = [&](const std::string& currentDir, int depth) {
+        if (depth > 6) return;
+        DIR* dir = opendir(currentDir.c_str());
+        if (!dir && currentDir[0] == '/') {
+            std::string alt = "sdmc:" + currentDir;
+            dir = opendir(alt.c_str());
+        }
+        if (!dir) return;
+
+        struct dirent* entry = nullptr;
+        while ((entry = readdir(dir)) != nullptr) {
+            if (entry->d_name[0] == '.') continue;
+            std::string name = entry->d_name;
+            std::string fullPath = currentDir + "/" + name;
+
+            // Robust directory check for Switch fatfs/exfat (does not fail on special characters)
+            bool isDir = (entry->d_type == DT_DIR);
+            if (!isDir && (entry->d_type == 0 || entry->d_type == DT_UNKNOWN)) {
+                DIR* testDir = opendir(fullPath.c_str());
+                if (!testDir && fullPath[0] == '/') {
+                    std::string alt = "sdmc:" + fullPath;
+                    testDir = opendir(alt.c_str());
+                }
+                if (testDir) {
+                    isDir = true;
+                    closedir(testDir);
+                }
+            }
+
+            if (isDir) {
+                scanDirRecursive(fullPath, depth + 1);
+                continue;
+            }
+
+            size_t dotPos = name.rfind('.');
+            if (dotPos == std::string::npos) continue;
+            std::string ext = name.substr(dotPos);
+            for (char& c : ext) c = (char)tolower((unsigned char)c);
+            if (validExts.find(ext) == validExts.end()) continue;
+
+            // Strict deduplication by normalized path (prevents showing files twice)
+            std::string normPath = normalizeSdmcPath(fullPath);
+            if (!seenPaths.insert(normPath).second) continue;
+
+            ParsedVideoInfo info = parseVideoFileName(name);
+
+            MetaItem item;
+            item.id = "local:" + fullPath;
+            item.type = info.type;
+            item.name = info.cleanName;
+            item.addonName = "Local Media";
+            item.description = "Local media file: " + fullPath;
+            item.releaseInfo = info.displayTag;
+
+            // Check sidecar poster images or fallback to online lookup
+            std::string sidecar = findSidecarPoster(fullPath, currentDir);
+            if (!sidecar.empty()) {
+                item.poster = sidecar;
+            } else {
+                item.poster = "local-lookup:" + info.type + ":" + info.searchTitle;
+            }
+
+            items.push_back(std::move(item));
+        }
+        closedir(dir);
+    };
+
+    for (const auto& dirPath : searchDirs) {
+        std::string normDir = normalizeSdmcPath(dirPath);
+        if (!seenDirs.insert(normDir).second) {
+            continue;
+        }
+        scanDirRecursive(dirPath, 0);
+    }
+
+    printf("[LocalScan] Discovered %zu unique local video files\n", items.size());
+    return items;
+}
+
+const std::vector<CatalogRow>& App::getHomeDisplayCatalogs() {
+    uint32_t now = SDL_GetTicks();
+    // Scan local media at most once every 5 seconds
+    if (now - m_lastLocalScanTime > 5000 || m_lastLocalScanTime == 0) {
+        auto scanned = scanLocalVideos();
+        bool changed = (scanned.size() != m_cachedLocalVideos.size());
+        if (!changed) {
+            for (size_t i = 0; i < scanned.size(); i++) {
+                if (scanned[i].id != m_cachedLocalVideos[i].id) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if (changed) {
+            m_cachedLocalVideos = std::move(scanned);
+            m_homeDisplayDirty = true;
+        }
+        m_lastLocalScanTime = now;
+    }
+
+    if (!m_homeDisplayDirty && !m_cachedDisplayCatalogs.empty()) {
+        return m_cachedDisplayCatalogs;
+    }
+
+    m_cachedDisplayCatalogs.clear();
+
+    std::vector<CatalogRow> allCatalogs;
+    {
+        std::lock_guard<std::mutex> lock(m_homeMutex);
+        allCatalogs = m_homeCatalogs;
+    }
+
+    bool hasTmdb = m_addonManager.hasTmdbAddon();
+    std::vector<CatalogRow> localCatalogs;
+
+    auto isLiveTvCatalogRow = [](const CatalogRow& row) -> bool {
+        std::string s = row.addonName + " " + row.catalogName + " " + row.catalogId + " " + row.transportUrl + " " + row.type;
+        for (char& c : s) c = (char)tolower((unsigned char)c);
+        if (s.find("indian-livetv") != std::string::npos ||
+            s.find("indian.tv") != std::string::npos ||
+            s.find("zee5") != std::string::npos ||
+            s.find("sonyliv") != std::string::npos ||
+            s.find("sliv_") != std::string::npos ||
+            s.find("mx_") != std::string::npos ||
+            s.find("live tv") != std::string::npos ||
+            s.find("livetv") != std::string::npos) {
+            return true;
+        }
+        if (row.type == "tv" && !AddonManager::isTmdbAddon(row.addonName, "", row.transportUrl)) {
+            return true;
+        }
+        return false;
+    };
+
+    if (m_homeFilterIndex == 0) {
+        // "All" filter: show all catalogs
+        localCatalogs = allCatalogs;
+    } else if (!hasTmdb) {
+        for (auto& row : allCatalogs) {
+            bool isLive = isLiveTvCatalogRow(row);
+            if (m_homeFilterIndex == 3 && isLive) {
+                localCatalogs.push_back(row);
+            } else if (m_homeFilterIndex == 4 && !isLive) {
+                localCatalogs.push_back(row);
+            }
+        }
+    } else {
+        for (auto& row : allCatalogs) {
+            bool isLive = isLiveTvCatalogRow(row);
+            bool isTmdb = AddonManager::isTmdbAddon(row.addonName, "", row.transportUrl);
+            if (m_homeFilterIndex == 1) {
+                // Movies (TMDB)
+                if (!isLive && isTmdb && (row.type == "movie" || row.catalogId.find("movie") != std::string::npos)) {
+                    localCatalogs.push_back(row);
+                }
+            } else if (m_homeFilterIndex == 2) {
+                // TV Shows / Series (TMDB)
+                if (!isLive && isTmdb && (row.type == "series" || (row.type == "tv" && row.catalogId.find("series") != std::string::npos))) {
+                    localCatalogs.push_back(row);
+                }
+            } else if (m_homeFilterIndex == 3) {
+                // Live TV
+                if (isLive) {
+                    localCatalogs.push_back(row);
+                }
+            } else if (m_homeFilterIndex == 4) {
+                // Add-ons (Catalogs from all other corresponding addons)
+                if (!isTmdb && !isLive) {
+                    localCatalogs.push_back(row);
+                }
+            }
+        }
+    }
+
+    // 1. Local Videos catalog row (placed at the top next to Continue Watching)
+    CatalogRow localRow;
+    bool isLocalEnabled = true;
+    for (const auto& a : m_addonManager.getAddons()) {
+        if (a.manifest.id == "local-media" || a.manifest.id == "local" || a.transportUrl == "local://media") {
+            isLocalEnabled = a.enabled;
+            break;
+        }
+    }
+    bool hasLocal = isLocalEnabled && !m_cachedLocalVideos.empty();
+    if (hasLocal) {
+        localRow.addonName = "Local";
+        localRow.catalogName = "Local Videos";
+        localRow.type = "movie";
+        if (m_homeFilterIndex == 1) {
+            for (const auto& item : m_cachedLocalVideos) {
+                if (item.type == "movie") localRow.items.push_back(item);
+            }
+        } else if (m_homeFilterIndex == 2) {
+            for (const auto& item : m_cachedLocalVideos) {
+                if (item.type == "series" || item.type == "tv") localRow.items.push_back(item);
+            }
+        } else {
+            localRow.items = m_cachedLocalVideos;
+        }
+        hasLocal = !localRow.items.empty();
+    }
+
+    // 2. Continue Watching row
     auto continueWatching = m_library.getContinueWatching(15);
+    CatalogRow cwRow;
+    bool hasCw = false;
     if (!continueWatching.empty()) {
-        CatalogRow cwRow;
         cwRow.addonName = "SwitchStream";
         cwRow.catalogName = "Continue Watching";
         for (const auto& item : continueWatching) {
+            if (hasTmdb) {
+                if (m_homeFilterIndex == 1 && item.type != "movie") continue;
+                if (m_homeFilterIndex == 2 && item.type != "series" && item.type != "tv") continue;
+            }
             MetaItem meta;
             meta.id = item.id;
             meta.type = item.type;
@@ -5673,9 +6841,24 @@ std::vector<CatalogRow> App::getHomeDisplayCatalogs() {
             meta.poster = item.poster;
             cwRow.items.push_back(std::move(meta));
         }
+        hasCw = !cwRow.items.empty();
+    }
+
+    // Insert at the top:
+    // If both exist:
+    //   Row 0: Continue Watching
+    //   Row 1: Local Videos
+    // If only one exists, it becomes Row 0!
+    if (hasLocal && (m_homeFilterIndex == 0 || m_homeFilterIndex == 1 || m_homeFilterIndex == 2 || m_homeFilterIndex == 4)) {
+        localCatalogs.insert(localCatalogs.begin(), std::move(localRow));
+    }
+    if (hasCw && (m_homeFilterIndex == 0 || m_homeFilterIndex == 1 || m_homeFilterIndex == 2)) {
         localCatalogs.insert(localCatalogs.begin(), std::move(cwRow));
     }
-    return localCatalogs;
+
+    m_cachedDisplayCatalogs = std::move(localCatalogs);
+    m_homeDisplayDirty = false;
+    return m_cachedDisplayCatalogs;
 }
 
 void App::saveCurrentPlaybackProgress() {
@@ -5691,6 +6874,7 @@ void App::saveCurrentPlaybackProgress() {
                                 m_detailMeta.name, m_detailMeta.poster,
                                 vidId, prog);
         m_library.save(LIB_FILE);
+        m_homeDisplayDirty = true;
         printf("[App] Saved watch progress for '%s': %.1f%% (pos=%.1fs, dur=%.1fs)\n",
                m_detailMeta.name.c_str(), prog * 100.0, pos, dur);
     }
@@ -5710,6 +6894,20 @@ void App::performSearch(const std::string& query) {
 
     m_searchThread = std::thread([this, query]() {
         auto results = m_addonManager.search(query);
+
+        // Also search local videos stored on SD card (/switch/switchstream/videos)
+        std::vector<MetaItem> localMatches;
+        for (const auto& item : m_cachedLocalVideos) {
+            if (AddonManager::itemMatchesQuery(item.name, query)) {
+                MetaItem m = item;
+                m.addonName = "Local Media";
+                localMatches.push_back(std::move(m));
+            }
+        }
+        if (!localMatches.empty()) {
+            results.insert(results.begin(), localMatches.begin(), localMatches.end());
+        }
+
         {
             std::lock_guard<std::mutex> lock(m_searchMutex);
             m_searchResults = std::move(results);
@@ -5745,10 +6943,32 @@ void App::sortSearchResults() {
     }
 }
 
+static bool parseKissKhId(const std::string& id, std::string& outDramaId, int& outEp) {
+    if (id.rfind("kisskh:", 0) != 0) return false;
+    std::string rest = id.substr(7);
+    size_t colon1 = rest.find(':');
+    if (colon1 == std::string::npos) {
+        outDramaId = rest;
+        outEp = 1;
+        return !outDramaId.empty();
+    }
+    outDramaId = rest.substr(0, colon1);
+    size_t colon2 = rest.find(':', colon1 + 1);
+    if (colon2 == std::string::npos) {
+        outEp = 1;
+        return !outDramaId.empty();
+    }
+    std::string epStr = rest.substr(colon2 + 1);
+    outEp = atoi(epStr.c_str());
+    if (outEp <= 0) outEp = 1;
+    return !outDramaId.empty();
+}
+
 void App::detailWorkerLoop() {
     while (m_workerRunning) {
         int task = 0;
-        std::string type, id;
+        std::string type, id, metaName, excludeFilter;
+        int s = 1, e = 1;
         int currentGen = 0;
 
         {
@@ -5758,6 +6978,10 @@ void App::detailWorkerLoop() {
             task = m_workerTask;
             type = m_workerType;
             id = m_workerId;
+            metaName = m_workerMetaName;
+            excludeFilter = m_workerExclude;
+            s = m_workerSeason;
+            e = m_workerEpisode;
             currentGen = m_workerGen;
             m_workerTask = 0;
         }
@@ -5787,9 +7011,12 @@ void App::detailWorkerLoop() {
             // A movie is NOT an episodic TV series, even if an addon (like YaStream)
             // returns a dummy 1-element video array.
             // Only true series and TMDB movie collections should show the episodic list!
-            bool isCollection = (id.rfind("ctmdb.", 0) == 0 || loadedMeta.type == "collections" || type == "collections");
-            bool isSeries = (loadedMeta.type == "series" || loadedMeta.type == "tv" || type == "series");
-            if (loadedMeta.type == "movie" && !isCollection) {
+            bool isLiveTv = (id.rfind("zee5:", 0) == 0 || id.rfind("sliv:", 0) == 0 || id.rfind("mx:", 0) == 0 ||
+                             loadedMeta.id.rfind("zee5:", 0) == 0 || loadedMeta.id.rfind("sliv:", 0) == 0 || loadedMeta.id.rfind("mx:", 0) == 0 ||
+                             type == "channel" || loadedMeta.type == "channel");
+            bool isCollection = !isLiveTv && (id.rfind("ctmdb.", 0) == 0 || loadedMeta.type == "collections" || type == "collections");
+            bool isSeries = !isLiveTv && (loadedMeta.type == "series" || (loadedMeta.type == "tv" && !loadedMeta.videos.empty()) || type == "series");
+            if ((loadedMeta.type == "movie" && !isCollection) || isLiveTv) {
                 loadedMeta.videos.clear();
             }
 
@@ -5820,7 +7047,14 @@ void App::detailWorkerLoop() {
                 }
 
                 std::string firstEpId;
-                if (!sortedEps.empty()) firstEpId = sortedEps[0].id;
+                int firstSeason = 1, firstEpisode = 1;
+                if (!sortedEps.empty()) {
+                    firstEpId = sortedEps[0].id;
+                    firstSeason = sortedEps[0].season > 0 ? sortedEps[0].season : 1;
+                    firstEpisode = sortedEps[0].episode > 0 ? sortedEps[0].episode : 1;
+                }
+
+                std::string metaName = loadedMeta.name;
 
                 {
                     std::lock_guard<std::mutex> lock(m_streamsMutex);
@@ -5837,23 +7071,51 @@ void App::detailWorkerLoop() {
                 }
 
                 if (!firstEpId.empty()) {
-                    auto rawStreams = m_addonManager.getAllStreams(type, firstEpId);
-                    if (firstEpId.rfind("tt", 0) != 0 && !loadedMeta.name.empty()) {
-                        std::string resolvedImdb = resolveImdbIdFromCinemeta(m_http, type, loadedMeta.name);
-                        if (!resolvedImdb.empty()) {
-                            int s = 1, e = 1;
-                            if (!sortedEps.empty()) {
-                                s = sortedEps[0].season > 0 ? sortedEps[0].season : 1;
-                                e = sortedEps[0].episode > 0 ? sortedEps[0].episode : 1;
-                            }
-                            std::string imdbEp = resolvedImdb + ":" + std::to_string(s) + ":" + std::to_string(e);
-                            auto imdbStreams = m_addonManager.getAllStreams(type, imdbEp);
+                    bool singleSource = (!isCollection && m_detailFromStreamAndCatalogAddon && !m_detailShowAllAddons);
+                    std::string onlyAddon = singleSource ? (!m_detailOriginAddonUrl.empty() ? m_detailOriginAddonUrl : m_detailOriginAddonName) : "";
+                    std::string streamType = isCollection ? "movie" : type;
+                    if (firstEpId.rfind("tt", 0) == 0 && firstEpId.find(':') == std::string::npos) {
+                        streamType = "movie";
+                    }
+                    auto rawStreams = m_addonManager.getAllStreams(streamType, firstEpId, onlyAddon);
+                    if (rawStreams.empty() && singleSource) {
+                        printf("[Detail] onlyAddon '%s' returned 0 streams; falling back to all stream providers\n", onlyAddon.c_str());
+                        singleSource = false;
+                        rawStreams = m_addonManager.getAllStreams(streamType, firstEpId, "");
+                    }
+
+                    // Direct KissKH CDN injection
+                    std::string kissDramaId;
+                    int kissEp = 1;
+                    if (parseKissKhId(firstEpId, kissDramaId, kissEp)) {
+                        Stream directKiss;
+                        directKiss.url = "https://dramayo.stream/hls/d1-" + kissDramaId + "-" + std::to_string(kissEp) + "/playlist.m3u8";
+                        directKiss.name = "yastream\nkisskh";
+                        directKiss.title = "KissKH • 1080p HLS (Direct CDN)";
+                        directKiss.addonName = "yastream";
+                        rawStreams.insert(rawStreams.begin(), directKiss);
+                    }
+
+                    if (!singleSource && firstEpId.rfind("tt", 0) != 0) {
+                        std::string targetImdb;
+                        if (isCollection) {
+                            std::string movieTitle = !sortedEps.empty() && !sortedEps[0].title.empty() ? sortedEps[0].title : metaName;
+                            targetImdb = resolveImdbIdFromCinemeta(m_http, "movie", movieTitle);
+                        } else if (!loadedMeta.imdb_id.empty() && loadedMeta.imdb_id.rfind("tt", 0) == 0) {
+                            targetImdb = loadedMeta.imdb_id;
+                        } else if (!metaName.empty()) {
+                            targetImdb = resolveImdbIdFromCinemeta(m_http, type, metaName);
+                        }
+                        if (!targetImdb.empty()) {
+                            std::string streamTarget = isCollection ? targetImdb : (targetImdb + ":" + std::to_string(firstSeason) + ":" + std::to_string(firstEpisode));
+                            auto imdbStreams = m_addonManager.getAllStreams(isCollection ? "movie" : type, streamTarget);
                             for (auto& sItem : imdbStreams) {
                                 rawStreams.push_back(std::move(sItem));
                             }
                         }
                     }
                     std::vector<Stream> loadedStreams;
+                    std::unordered_set<std::string> seenUrls;
                     for (const auto& s : rawStreams) {
                         bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
                         if (isTorrentStream) {
@@ -5871,21 +7133,29 @@ void App::detailWorkerLoop() {
                                 if (conv.url.rfind("magnet:", 0) == 0 && conv.url.find("opentrackr.org") == std::string::npos) {
                                     conv.url += DEFAULT_MAGNET_TRACKERS;
                                 }
-                                loadedStreams.push_back(conv);
+                                if (seenUrls.insert(conv.url).second) {
+                                    loadedStreams.push_back(conv);
+                                }
                             } else if (!s.infoHash.empty()) {
                                 Stream conv = s;
                                 conv.url = "magnet:?xt=urn:btih:" + s.infoHash + DEFAULT_MAGNET_TRACKERS;
-                                loadedStreams.push_back(conv);
+                                if (seenUrls.insert(conv.url).second) {
+                                    loadedStreams.push_back(conv);
+                                }
                             }
                         } else {
                             if (!s.url.empty()) {
                                 bool isHttp = s.url.rfind("http", 0) == 0;
                                 if (!isHttp) continue;
-                                loadedStreams.push_back(s);
+                                if (seenUrls.insert(s.url).second) {
+                                    loadedStreams.push_back(s);
+                                }
                             } else if (!s.ytId.empty()) {
                                 Stream conv = s;
                                 conv.url = "https://www.youtube.com/watch?v=" + s.ytId;
-                                loadedStreams.push_back(conv);
+                                if (seenUrls.insert(conv.url).second) {
+                                    loadedStreams.push_back(conv);
+                                }
                             }
                         }
                     }
@@ -5903,10 +7173,40 @@ void App::detailWorkerLoop() {
                 continue;
             }
 
-            auto rawStreams = m_addonManager.getAllStreams(type, id);
-            if (id.rfind("tt", 0) != 0 && !loadedMeta.name.empty()) {
-                std::string resolvedImdb = resolveImdbIdFromCinemeta(m_http, type, loadedMeta.name);
-                if (!resolvedImdb.empty()) {
+            bool singleSource = (m_detailFromStreamAndCatalogAddon && !m_detailShowAllAddons);
+            std::string onlyAddon = singleSource ? (!m_detailOriginAddonUrl.empty() ? m_detailOriginAddonUrl : m_detailOriginAddonName) : "";
+
+            std::string queryMovieId = (!loadedMeta.imdb_id.empty() && loadedMeta.imdb_id.rfind("tt", 0) == 0) ? loadedMeta.imdb_id : id;
+            if (queryMovieId.rfind("kisskh:", 0) == 0 && queryMovieId.find(':', 7) == std::string::npos) {
+                queryMovieId += ":1:1";
+            }
+            auto rawStreams = m_addonManager.getAllStreams(type, queryMovieId, onlyAddon);
+            if (rawStreams.empty() && singleSource) {
+                printf("[Detail] onlyAddon '%s' returned 0 streams; falling back to all stream providers\n", onlyAddon.c_str());
+                singleSource = false;
+                rawStreams = m_addonManager.getAllStreams(type, queryMovieId, "");
+            }
+
+            // Direct KissKH CDN injection
+            std::string kissDramaId;
+            int kissEp = 1;
+            if (parseKissKhId(id, kissDramaId, kissEp)) {
+                Stream directKiss;
+                directKiss.url = "https://dramayo.stream/hls/d1-" + kissDramaId + "-" + std::to_string(kissEp) + "/playlist.m3u8";
+                directKiss.name = "yastream\nkisskh";
+                directKiss.title = "KissKH • 1080p HLS (Direct CDN)";
+                directKiss.addonName = "yastream";
+                rawStreams.insert(rawStreams.begin(), directKiss);
+            }
+
+            if (!singleSource && queryMovieId.rfind("tt", 0) != 0) {
+                std::string resolvedImdb;
+                if (!loadedMeta.imdb_id.empty() && loadedMeta.imdb_id.rfind("tt", 0) == 0) {
+                    resolvedImdb = loadedMeta.imdb_id;
+                } else if (!loadedMeta.name.empty()) {
+                    resolvedImdb = resolveImdbIdFromCinemeta(m_http, type, loadedMeta.name);
+                }
+                if (!resolvedImdb.empty() && resolvedImdb != queryMovieId) {
                     auto imdbStreams = m_addonManager.getAllStreams(type, resolvedImdb);
                     for (auto& sItem : imdbStreams) {
                         rawStreams.push_back(std::move(sItem));
@@ -5914,6 +7214,7 @@ void App::detailWorkerLoop() {
                 }
             }
             std::vector<Stream> loadedStreams;
+            std::unordered_set<std::string> seenUrls;
             for (const auto& s : rawStreams) {
                 bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
                 if (isTorrentStream) {
@@ -5934,21 +7235,29 @@ void App::detailWorkerLoop() {
                         if (conv.url.rfind("magnet:", 0) == 0 && conv.url.find("opentrackr.org") == std::string::npos) {
                             conv.url += DEFAULT_MAGNET_TRACKERS;
                         }
-                        loadedStreams.push_back(conv);
+                        if (seenUrls.insert(conv.url).second) {
+                            loadedStreams.push_back(conv);
+                        }
                     } else if (!s.infoHash.empty()) {
                         Stream conv = s;
                         conv.url = "magnet:?xt=urn:btih:" + s.infoHash + DEFAULT_MAGNET_TRACKERS;
-                        loadedStreams.push_back(conv);
+                        if (seenUrls.insert(conv.url).second) {
+                            loadedStreams.push_back(conv);
+                        }
                     }
                 } else {
                     if (!s.url.empty()) {
                         bool isHttp = s.url.rfind("http", 0) == 0;
                         if (!isHttp) continue;
-                        loadedStreams.push_back(s);
+                        if (seenUrls.insert(s.url).second) {
+                            loadedStreams.push_back(s);
+                        }
                     } else if (!s.ytId.empty()) {
                         Stream conv = s;
                         conv.url = "https://www.youtube.com/watch?v=" + s.ytId;
-                        loadedStreams.push_back(conv);
+                        if (seenUrls.insert(conv.url).second) {
+                            loadedStreams.push_back(conv);
+                        }
                     }
                 }
             }
@@ -5965,23 +7274,65 @@ void App::detailWorkerLoop() {
                 m_loadingDetail = false;
             }
         } else if (task == 2) { // Episode Streams
-            auto rawStreams = m_addonManager.getAllStreams(type, id);
-            if (id.rfind("tt", 0) != 0 && !m_detailMeta.name.empty()) {
-                std::string resolvedImdb = resolveImdbIdFromCinemeta(m_http, type, m_detailMeta.name);
-                if (!resolvedImdb.empty()) {
-                    int s = 1, e = 1;
+            bool isCollection = (m_detailMeta.id.rfind("ctmdb.", 0) == 0 || m_detailMeta.type == "collections" || m_workerType == "collections");
+            std::string streamType = isCollection ? "movie" : type;
+            if (id.rfind("tt", 0) == 0 && id.find(':') == std::string::npos) {
+                streamType = "movie";
+            }
+            bool singleSource = (!isCollection && m_detailFromStreamAndCatalogAddon && !m_detailShowAllAddons);
+            std::string onlyAddon = singleSource ? (!m_detailOriginAddonUrl.empty() ? m_detailOriginAddonUrl : m_detailOriginAddonName) : "";
+            auto rawStreams = m_addonManager.getAllStreams(streamType, id, onlyAddon);
+            if (rawStreams.empty() && singleSource) {
+                printf("[Detail] onlyAddon '%s' returned 0 streams; falling back to all stream providers\n", onlyAddon.c_str());
+                singleSource = false;
+                rawStreams = m_addonManager.getAllStreams(streamType, id, "");
+            }
+
+            // Direct KissKH CDN injection
+            std::string kissDramaId;
+            int kissEp = 1;
+            if (parseKissKhId(id, kissDramaId, kissEp)) {
+                Stream directKiss;
+                directKiss.url = "https://dramayo.stream/hls/d1-" + kissDramaId + "-" + std::to_string(kissEp) + "/playlist.m3u8";
+                directKiss.name = "yastream\nkisskh";
+                directKiss.title = "KissKH • 1080p HLS (Direct CDN)";
+                directKiss.addonName = "yastream";
+                rawStreams.insert(rawStreams.begin(), directKiss);
+            }
+
+            if (!singleSource && id.rfind("tt", 0) != 0) {
+                std::string resolvedImdb;
+                if (isCollection) {
+                    std::string movieTitle;
                     if (!m_detailEpisodes.empty() && m_detailEpisodeIndex >= 0 && m_detailEpisodeIndex < (int)m_detailEpisodes.size()) {
-                        s = m_detailEpisodes[m_detailEpisodeIndex].season > 0 ? m_detailEpisodes[m_detailEpisodeIndex].season : 1;
-                        e = m_detailEpisodes[m_detailEpisodeIndex].episode > 0 ? m_detailEpisodes[m_detailEpisodeIndex].episode : 1;
+                        movieTitle = m_detailEpisodes[m_detailEpisodeIndex].title;
                     }
-                    std::string imdbEp = resolvedImdb + ":" + std::to_string(s) + ":" + std::to_string(e);
-                    auto imdbStreams = m_addonManager.getAllStreams(type, imdbEp);
+                    if (!movieTitle.empty()) {
+                        resolvedImdb = resolveImdbIdFromCinemeta(m_http, "movie", movieTitle);
+                    }
+                } else if (!m_detailMeta.imdb_id.empty() && m_detailMeta.imdb_id.rfind("tt", 0) == 0) {
+                    resolvedImdb = m_detailMeta.imdb_id;
+                } else if (!m_detailMeta.name.empty()) {
+                    resolvedImdb = resolveImdbIdFromCinemeta(m_http, type, m_detailMeta.name);
+                }
+                if (!resolvedImdb.empty()) {
+                    std::string targetEp = resolvedImdb;
+                    if (!isCollection && (type == "series" || type == "tv")) {
+                        int s = 1, e = 1;
+                        if (!m_detailEpisodes.empty() && m_detailEpisodeIndex >= 0 && m_detailEpisodeIndex < (int)m_detailEpisodes.size()) {
+                            s = m_detailEpisodes[m_detailEpisodeIndex].season > 0 ? m_detailEpisodes[m_detailEpisodeIndex].season : 1;
+                            e = m_detailEpisodes[m_detailEpisodeIndex].episode > 0 ? m_detailEpisodes[m_detailEpisodeIndex].episode : 1;
+                        }
+                        targetEp += ":" + std::to_string(s) + ":" + std::to_string(e);
+                    }
+                    auto imdbStreams = m_addonManager.getAllStreams(isCollection ? "movie" : type, targetEp);
                     for (auto& sItem : imdbStreams) {
                         rawStreams.push_back(std::move(sItem));
                     }
                 }
             }
             std::vector<Stream> loadedStreams;
+            std::unordered_set<std::string> seenUrls;
             for (const auto& s : rawStreams) {
                 bool isTorrentStream = !s.infoHash.empty() || s.url.rfind("magnet:", 0) == 0;
                 if (isTorrentStream) {
@@ -6002,15 +7353,22 @@ void App::detailWorkerLoop() {
                         if (modified.url.rfind("magnet:", 0) == 0 && modified.url.find("opentrackr.org") == std::string::npos) {
                             modified.url += DEFAULT_MAGNET_TRACKERS;
                         }
-                        loadedStreams.push_back(modified);
+                        if (seenUrls.insert(modified.url).second) {
+                            loadedStreams.push_back(modified);
+                        }
                     } else if (!s.infoHash.empty()) {
                         Stream modified = s;
                         modified.url = "magnet:?xt=urn:btih:" + s.infoHash + DEFAULT_MAGNET_TRACKERS;
-                        loadedStreams.push_back(modified);
+                        if (seenUrls.insert(modified.url).second) {
+                            loadedStreams.push_back(modified);
+                        }
                     }
                 } else {
                     if (!s.url.empty() || !s.externalUrl.empty()) {
-                        loadedStreams.push_back(s);
+                        std::string checkUrl = !s.url.empty() ? s.url : s.externalUrl;
+                        if (seenUrls.insert(checkUrl).second) {
+                            loadedStreams.push_back(s);
+                        }
                     }
                 }
             }
@@ -6021,11 +7379,136 @@ void App::detailWorkerLoop() {
                 m_detailStreams = std::move(loadedStreams);
                 m_loadingStreams = false;
             }
+        } else if (task == 3) { // Additional streams (from all other addons)
+            printf("[Streams] Loading additional streams excluding origin: %s\n", excludeFilter.c_str());
+            std::string queryId = id;
+            if (type == "movie" && queryId.rfind("kisskh:", 0) == 0 && queryId.find(':', 7) == std::string::npos) {
+                queryId += ":1:1";
+            }
+            auto extraStreams = m_addonManager.getAllStreams(type, queryId, "", excludeFilter);
+
+            // Also resolve IMDb if not tt ID
+            if (id.rfind("tt", 0) != 0) {
+                std::string resolvedImdb;
+                bool isCollection = (type == "collections" || id.rfind("ctmdb.", 0) == 0);
+                if (isCollection) {
+                    std::string movieTitle;
+                    {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        if (!m_detailEpisodes.empty() && m_detailEpisodeIndex >= 0 && m_detailEpisodeIndex < (int)m_detailEpisodes.size()) {
+                            movieTitle = m_detailEpisodes[m_detailEpisodeIndex].title;
+                        }
+                    }
+                    if (!movieTitle.empty()) {
+                        resolvedImdb = resolveImdbIdFromCinemeta(m_http, "movie", movieTitle);
+                    }
+                } else {
+                    {
+                        std::lock_guard<std::mutex> lock(m_streamsMutex);
+                        if (!m_detailMeta.imdb_id.empty() && m_detailMeta.imdb_id.rfind("tt", 0) == 0) {
+                            resolvedImdb = m_detailMeta.imdb_id;
+                        }
+                    }
+                    if (resolvedImdb.empty() && !metaName.empty()) {
+                        resolvedImdb = resolveImdbIdFromCinemeta(m_http, type, metaName);
+                    }
+                }
+
+                if (!resolvedImdb.empty()) {
+                    std::string targetId = resolvedImdb;
+                    if (!isCollection && (type == "series" || type == "tv")) {
+                        targetId += ":" + std::to_string(s) + ":" + std::to_string(e);
+                    }
+                    auto imdbStreams = m_addonManager.getAllStreams(isCollection ? "movie" : type, targetId, "", excludeFilter);
+                    for (auto& sItem : imdbStreams) {
+                        extraStreams.push_back(std::move(sItem));
+                    }
+                }
+            }
+
+            std::vector<Stream> converted;
+            for (const auto& st : extraStreams) {
+                bool isTorrentStream = !st.infoHash.empty() || st.url.rfind("magnet:", 0) == 0;
+                if (isTorrentStream) {
+                    if (!m_addonManager.getEnableTorrents()) continue;
+                    if (isFourKOrHigher(st)) continue;
+                    static const std::string DEFAULT_MAGNET_TRACKERS =
+                        "&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce"
+                        "&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce"
+                        "&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce"
+                        "&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce"
+                        "&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce";
+                    if (!st.url.empty()) {
+                        Stream conv = st;
+                        if (conv.url.rfind("magnet:", 0) == 0 && conv.url.find("opentrackr.org") == std::string::npos) {
+                            conv.url += DEFAULT_MAGNET_TRACKERS;
+                        }
+                        converted.push_back(conv);
+                    } else if (!st.infoHash.empty()) {
+                        Stream conv = st;
+                        conv.url = "magnet:?xt=urn:btih:" + st.infoHash + DEFAULT_MAGNET_TRACKERS;
+                        converted.push_back(conv);
+                    }
+                } else {
+                    if (!st.url.empty()) {
+                        if (st.url.rfind("http", 0) == 0) converted.push_back(st);
+                    } else if (!st.ytId.empty()) {
+                        Stream conv = st;
+                        conv.url = "https://www.youtube.com/watch?v=" + st.ytId;
+                        converted.push_back(conv);
+                    }
+                }
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(m_streamsMutex);
+                if (m_detailGeneration.load() != currentGen) continue;
+
+                std::unordered_set<std::string> seen;
+                for (const auto& sItem : m_detailStreams) {
+                    seen.insert(!sItem.url.empty() ? sItem.url : sItem.infoHash);
+                }
+                for (auto& sItem : converted) {
+                    std::string key = !sItem.url.empty() ? sItem.url : sItem.infoHash;
+                    if (!key.empty() && seen.insert(key).second) {
+                        m_detailStreams.push_back(std::move(sItem));
+                    }
+                }
+                m_loadingStreams = false;
+            }
         }
     }
 }
 
 void App::loadDetail(const std::string& type, const std::string& id) {
+    if (id.rfind("local:", 0) == 0) {
+        m_loadingDetail = false;
+        m_loadingStreams = false;
+        m_detailEpisodeSelected = false;
+        m_currentPlayingEpisodeId.clear();
+        m_detailEpisodeIndex = 0;
+        m_detailStreamIndex = 0;
+        m_detailSeasonFilter = 0;
+
+        std::string filePath = id.substr(6);
+        Stream localStream;
+        localStream.url = filePath;
+        localStream.name = "Local File";
+        localStream.title = "Direct Playback (" + filePath + ")";
+        localStream.addonName = "Local Media";
+
+        {
+            std::lock_guard<std::mutex> lock(m_streamsMutex);
+            m_detailStreams.clear();
+            m_detailStreams.push_back(localStream);
+            m_detailEpisodes.clear();
+            m_detailSeasons.clear();
+            m_detailFocus = DetailFocus::STREAMS;
+            ++m_detailGeneration;
+        }
+        return;
+    }
+
     m_loadingDetail = true;
     m_loadingStreams = true;
     m_detailEpisodeSelected = false;
@@ -6079,6 +7562,77 @@ void App::loadEpisodeStreams(const std::string& epId) {
         m_workerGen = currentGen;
     }
     m_workerCv.notify_one();
+}
+
+void App::loadAdditionalStreams() {
+    int currentGen = m_detailGeneration.load();
+    std::string type = m_detailMeta.type;
+    std::string id = (!m_currentPlayingEpisodeId.empty()) ? m_currentPlayingEpisodeId : m_detailMeta.id;
+    std::string metaName = m_detailMeta.name;
+    int s = 1, e = 1;
+    {
+        std::lock_guard<std::mutex> lock(m_streamsMutex);
+        if (!m_detailEpisodes.empty() && m_detailEpisodeIndex >= 0 && m_detailEpisodeIndex < (int)m_detailEpisodes.size()) {
+            s = m_detailEpisodes[m_detailEpisodeIndex].season > 0 ? m_detailEpisodes[m_detailEpisodeIndex].season : 1;
+            e = m_detailEpisodes[m_detailEpisodeIndex].episode > 0 ? m_detailEpisodes[m_detailEpisodeIndex].episode : 1;
+        }
+        m_loadingStreams = true;
+    }
+
+    std::string excludeFilter = !m_detailOriginAddonUrl.empty() ? m_detailOriginAddonUrl : m_detailOriginAddonName;
+
+    {
+        std::lock_guard<std::mutex> lock(m_workerMutex);
+        m_workerTask = 3;
+        m_workerType = type;
+        m_workerId = id;
+        m_workerMetaName = metaName;
+        m_workerExclude = excludeFilter;
+        m_workerSeason = s;
+        m_workerEpisode = e;
+        m_workerGen = currentGen;
+    }
+    m_workerCv.notify_one();
+}
+
+void App::filterStreamsToOriginAddon() {
+    std::lock_guard<std::mutex> lock(m_streamsMutex);
+    std::string originName = m_detailOriginAddonName;
+    for (char& c : originName) c = (char)tolower((unsigned char)c);
+    std::string originUrl = m_detailOriginAddonUrl;
+    for (char& c : originUrl) c = (char)tolower((unsigned char)c);
+
+    std::vector<Stream> filtered;
+    for (const auto& s : m_detailStreams) {
+        std::string sAddon = s.addonName;
+        for (char& c : sAddon) c = (char)tolower((unsigned char)c);
+        std::string sName = s.name;
+        for (char& c : sName) c = (char)tolower((unsigned char)c);
+
+        bool matchesOrigin = false;
+        if (!originName.empty() && (sAddon.find(originName) != std::string::npos || originName.find(sAddon) != std::string::npos ||
+                                    sName.find(originName) != std::string::npos)) {
+            matchesOrigin = true;
+        }
+        if (!originUrl.empty() && (sAddon.find(originUrl) != std::string::npos || sName.find(originUrl) != std::string::npos)) {
+            matchesOrigin = true;
+        }
+        if (sName.find("yastream") != std::string::npos || sName.find("kisskh") != std::string::npos) {
+            if (originName.find("yastream") != std::string::npos || originName.find("kisskh") != std::string::npos ||
+                originUrl.find("yastream") != std::string::npos || originUrl.find("kisskh") != std::string::npos) {
+                matchesOrigin = true;
+            }
+        }
+        if (matchesOrigin) {
+            filtered.push_back(s);
+        }
+    }
+    if (!filtered.empty()) {
+        m_detailStreams = std::move(filtered);
+    }
+    if (m_detailStreamIndex >= (int)m_detailStreams.size()) {
+        m_detailStreamIndex = 0;
+    }
 }
 
 void App::startTorrentPolling() {
@@ -6165,7 +7719,10 @@ void App::playStream(const Stream& stream) {
     }
     // Guard against non-playable URLs that somehow slipped through
     bool isPlayable = playUrl.rfind("http", 0) == 0 ||
-                      playUrl.rfind("magnet:", 0) == 0;
+                      playUrl.rfind("magnet:", 0) == 0 ||
+                      playUrl.rfind("/", 0) == 0 ||
+                      playUrl.rfind("sdmc:", 0) == 0 ||
+                      playUrl.rfind("./", 0) == 0;
     if (!isPlayable) {
         printf("[playStream] ERROR: unplayable URL scheme: %s\n", playUrl.substr(0,60).c_str());
         return;
@@ -6283,15 +7840,19 @@ void App::playStream(const Stream& stream) {
     m_osdShowTime = SDL_GetTicks();
 }
 
-void App::openSwkbd(std::string& output, const std::string& header) {
+void App::openSwkbd(std::string& output, const std::string& header, const std::string& initialText) {
 #ifdef __SWITCH__
     SwkbdConfig kbd;
     swkbdCreate(&kbd, 0);
     swkbdConfigMakePresetDefault(&kbd);
+    swkbdConfigSetStringLenMax(&kbd, 1024);
     if (!header.empty()) {
         swkbdConfigSetHeaderText(&kbd, header.c_str());
     }
-    char buf[256] = {0};
+    if (!initialText.empty()) {
+        swkbdConfigSetInitialText(&kbd, initialText.c_str());
+    }
+    char buf[1024] = {0};
     Result rc = swkbdShow(&kbd, buf, sizeof(buf));
     swkbdClose(&kbd);
     if (R_SUCCEEDED(rc)) {
@@ -6302,16 +7863,23 @@ void App::openSwkbd(std::string& output, const std::string& header) {
     if (!header.empty()) {
         printf("%s\n", header.c_str());
     }
+    if (!initialText.empty()) {
+        printf("Default: %s\n", initialText.c_str());
+    }
     printf("Enter text: ");
     fflush(stdout);
 
-    char buf[256] = {0};
+    char buf[1024] = {0};
     if (fgets(buf, sizeof(buf), stdin)) {
         std::string str(buf);
         while (!str.empty() && (str.back() == '\n' || str.back() == '\r')) {
             str.pop_back();
         }
-        output = str;
+        if (str.empty() && !initialText.empty()) {
+            output = initialText;
+        } else {
+            output = str;
+        }
     }
 #endif
 }
@@ -6322,6 +7890,7 @@ void App::shutdown() {
 
     // 0. Cancel all in-flight HTTP requests so blocked threads return quickly
     m_http.cancel();
+    m_imageHttp.cancel();
 
     // Signal sleeping threads (torrent poller) to wake up immediately
     m_shuttingDown = true;
@@ -6375,6 +7944,10 @@ void App::shutdown() {
     // 4. Stop mpv playback before destroying it so it drains buffers fast
     m_player.stop();
     m_player.shutdown();
+
+    // Auto-clear catalog poster cache on every app exit
+    cleanCatalogImageCache();
+
     delete m_imageCache;
     m_imageCache = nullptr;
 
@@ -6382,12 +7955,17 @@ void App::shutdown() {
     if (m_fontNormal) { TTF_CloseFont(m_fontNormal); m_fontNormal = nullptr; }
     if (m_fontSmall)  { TTF_CloseFont(m_fontSmall);  m_fontSmall  = nullptr; }
     
+    if (m_pillTexture) { SDL_DestroyTexture(m_pillTexture); m_pillTexture = nullptr; }
     if (m_renderer) { SDL_DestroyRenderer(m_renderer); m_renderer = nullptr; }
     if (m_window)   { SDL_DestroyWindow(m_window);     m_window   = nullptr; }
     
     IMG_Quit();
     TTF_Quit();
     SDL_Quit();
+
+#ifdef __SWITCH__
+    lblExit();
+#endif
 }
 
 void App::handleDrag(int dx, int dy) {
@@ -6397,11 +7975,7 @@ void App::handleDrag(int dx, int dy) {
 
     switch (m_screen) {
     case Screen::HOME: {
-        std::vector<CatalogRow> localCatalogs;
-        {
-            std::lock_guard<std::mutex> lock(m_homeMutex);
-            localCatalogs = m_homeCatalogs;
-        }
+        const auto& localCatalogs = getHomeDisplayCatalogs();
         if (localCatalogs.empty()) return;
 
         // Vertical scroll (scroll rows)
@@ -6554,21 +8128,50 @@ void App::handleDrag(int dx, int dy) {
                 }
             }
         } else {
-            // Swipe to scrub (horizontal drag)
-            if (!m_isScrubbing) {
-                m_isScrubbing = true;
-                m_scrubStartPos = m_player.getPosition();
-                m_scrubCurrentPos = m_scrubStartPos;
-                printf("[Touch] Drag Player: Scrubbing started at pos=%.2f\n", m_scrubStartPos);
+            // Determine player gesture on first drag motion if not already locked
+            if (m_playerTouchGesture == 0) {
+                if (m_touchStartX < 440) {
+                    m_playerTouchGesture = 1; // Left side: Brightness
+                    printf("[Player] Touch gesture locked: BRIGHTNESS (startX=%d)\n", m_touchStartX);
+                } else if (m_touchStartX > 840) {
+                    m_playerTouchGesture = 2; // Right side: Volume
+                    printf("[Player] Touch gesture locked: VOLUME (startX=%d)\n", m_touchStartX);
+                } else {
+                    m_playerTouchGesture = 3; // Center / horizontal: Scrub
+                    printf("[Player] Touch gesture locked: SCRUB (startX=%d)\n", m_touchStartX);
+                }
             }
-            
-            m_dragAccumX += dx;
-            double duration = m_player.getDuration();
-            if (duration > 0.0) {
-                m_scrubCurrentPos = m_scrubStartPos + m_dragAccumX * 0.25;
-                if (m_scrubCurrentPos < 0.0) m_scrubCurrentPos = 0.0;
-                if (m_scrubCurrentPos > duration) m_scrubCurrentPos = duration;
-                m_osdShowTime = SDL_GetTicks(); // Keep OSD showing
+
+            if (m_playerTouchGesture == 1) {
+                // Swipe up / down on left side: adjust brightness
+                float deltaBrt = -dy / 300.0f;
+                m_brightness = std::clamp(m_brightness + deltaBrt, 0.05f, 1.0f);
+#ifdef __SWITCH__
+                lblSetCurrentBrightnessSetting(m_brightness);
+#endif
+                m_brightnessShowTime = SDL_GetTicks();
+            } else if (m_playerTouchGesture == 2) {
+                // Swipe up / down on right side: adjust volume
+                double deltaVol = -dy / 3.0; // 300px drag = 100% volume
+                m_player.changeVolume(deltaVol);
+                m_volumeShowTime = SDL_GetTicks();
+            } else {
+                // Center / Horizontal drag: Swipe to scrub
+                if (!m_isScrubbing) {
+                    m_isScrubbing = true;
+                    m_scrubStartPos = m_player.getPosition();
+                    m_scrubCurrentPos = m_scrubStartPos;
+                    printf("[Touch] Drag Player: Scrubbing started at pos=%.2f\n", m_scrubStartPos);
+                }
+                
+                m_dragAccumX += dx;
+                double duration = m_player.getDuration();
+                if (duration > 0.0) {
+                    m_scrubCurrentPos = m_scrubStartPos + m_dragAccumX * 0.25;
+                    if (m_scrubCurrentPos < 0.0) m_scrubCurrentPos = 0.0;
+                    if (m_scrubCurrentPos > duration) m_scrubCurrentPos = duration;
+                    m_osdShowTime = SDL_GetTicks(); // Keep OSD showing
+                }
             }
         }
         break;
@@ -6585,30 +8188,39 @@ void App::handleLongPress(int x, int y) {
 
     switch (m_screen) {
     case Screen::HOME: {
-        std::vector<CatalogRow> localCatalogs;
-        {
-            std::lock_guard<std::mutex> lock(m_homeMutex);
-            localCatalogs = m_homeCatalogs;
-        }
+        const auto& localCatalogs = getHomeDisplayCatalogs();
         if (localCatalogs.empty()) return;
 
-        int startY = 74;
-        int visibleRows = 2;
+        int startY = 122;
         int firstRow = m_homeRowIndex > 0 ? m_homeRowIndex - 1 : 0;
-        int maxVisibleCols = (SCREEN_W - 80) / (POSTER_W + POSTER_GAP);
 
-        for (int r = firstRow; r < (int)localCatalogs.size() && r < firstRow + visibleRows + 1; r++) {
+        auto getRowHeight = [&localCatalogs](int r) -> int {
+            if (r < 0 || r >= (int)localCatalogs.size()) return 280;
+            bool isCW = (localCatalogs[r].addonName == "SwitchStream" || localCatalogs[r].catalogName == "Continue Watching");
+            bool isLocal = (localCatalogs[r].addonName == "Local" || localCatalogs[r].catalogName == "Local Videos");
+            return (isCW || isLocal) ? 175 : 280;
+        };
+
+        int curY = startY;
+        for (int r = firstRow; r < (int)localCatalogs.size(); r++) {
+            if (curY + 36 > SCREEN_H - 40) break;
             auto& row = localCatalogs[r];
-            int rowY = startY + (r - firstRow) * ROW_HEIGHT;
-            int cardY = rowY + 34;
+            int thisRowH = getRowHeight(r);
+            bool isCW = (row.addonName == "SwitchStream" || row.catalogName == "Continue Watching");
+            bool isLocal = (row.addonName == "Local" || row.catalogName == "Local Videos");
+            int cardW = (isCW || isLocal) ? 208 : POSTER_W;
+            int cardH = (isCW || isLocal) ? 118 : POSTER_H;
+            int cardGap = (isCW || isLocal) ? 16 : POSTER_GAP;
+            int maxVisibleCols = (SCREEN_W - 80) / (cardW + cardGap);
 
             int startCol = 0;
             if (r == m_homeRowIndex && m_homeColIndex >= maxVisibleCols)
                 startCol = m_homeColIndex - maxVisibleCols + 1;
 
+            int cardY = curY + 34;
             for (int c = startCol; c < (int)row.items.size() && c < startCol + maxVisibleCols; c++) {
-                int cardX = 40 + (c - startCol) * (POSTER_W + POSTER_GAP);
-                if (x >= cardX && x < cardX + POSTER_W && y >= cardY && y < cardY + POSTER_H) {
+                int cardX = 40 + (c - startCol) * (cardW + cardGap);
+                if (x >= cardX && x < cardX + cardW && y >= cardY && y < cardY + cardH) {
                     auto& item = row.items[c];
                     m_homeRowIndex = r;
                     m_homeColIndex = c;
@@ -6618,6 +8230,7 @@ void App::handleLongPress(int x, int y) {
                     return;
                 }
             }
+            curY += thisRowH;
         }
         break;
     }
@@ -6672,6 +8285,9 @@ void App::handleLongPress(int x, int y) {
                 if (m_addonTab == 0 && i < (int)addons.size()) {
                     std::string addonId = addons[i].manifest.id;
                     std::string addonUrl = addons[i].transportUrl;
+                    if (addonId == "local-media" || addonId == "local" || addonUrl == "local://media") {
+                        return;
+                    }
                     m_loading = true;
                     m_addonActionText = "Removing addon...";
                     if (m_installThread.joinable()) m_installThread.join();
@@ -6695,6 +8311,17 @@ void App::handleLongPress(int x, int y) {
     default:
         break;
     }
+}
+
+void App::triggerSkipIndicator(double deltaSec) {
+    uint32_t now = SDL_GetTicks();
+    if (now - m_skipShowTime < 1100 && ((deltaSec > 0 && m_skipDelta > 0) || (deltaSec < 0 && m_skipDelta < 0))) {
+        m_skipDelta += deltaSec;
+    } else {
+        m_skipDelta = deltaSec;
+    }
+    m_skipShowTime = now;
+    printf("[Player] Skip Indicator triggered: delta=%.1fs, totalAccum=%.1fs\n", deltaSec, m_skipDelta);
 }
 
 } // namespace ss

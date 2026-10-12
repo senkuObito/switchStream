@@ -10,6 +10,7 @@
 #include <list>
 #include <memory>
 #include <cstdint>
+#include <mutex>
 
 struct SDL_Texture;
 struct SDL_Renderer;
@@ -18,7 +19,7 @@ namespace ss {
 
 class ImageCache {
 public:
-    ImageCache(SDL_Renderer* renderer, int maxCacheMB = 128);
+    ImageCache(SDL_Renderer* renderer, int maxCacheMB = 48);
     ~ImageCache();
 
     // Get texture for URL or title key. Returns nullptr if not cached.
@@ -54,6 +55,8 @@ private:
     SDL_Renderer* m_renderer;
     size_t m_maxBytes;
     size_t m_currentBytes = 0;
+
+    mutable std::recursive_mutex m_mutex;
 
     // LRU list: front = most recently used
     std::list<std::string> m_lruOrder;

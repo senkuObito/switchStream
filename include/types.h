@@ -18,7 +18,10 @@ enum HidNpadButton {
     HidNpadButton_Y      = 1 << 3,
     HidNpadButton_L      = 1 << 6,
     HidNpadButton_R      = 1 << 7,
+    HidNpadButton_ZL     = 1 << 8,
+    HidNpadButton_ZR     = 1 << 9,
     HidNpadButton_Plus   = 1 << 10,
+    HidNpadButton_Minus  = 1 << 11,
     HidNpadButton_Left   = 1 << 12,
     HidNpadButton_Up     = 1 << 13,
     HidNpadButton_Right  = 1 << 14,
@@ -72,6 +75,7 @@ struct Video {
 
 struct MetaItem {
     std::string id;
+    std::string imdb_id;       // IMDb ID if different from id (e.g. TMDB items)
     std::string type;          // "movie", "series"
     std::string name;
     std::string poster;        // URL
@@ -100,6 +104,7 @@ struct Stream {
     bool notWebReady = false;
     std::string bingeGroup;
     std::string httpHeaderFields; // Comma-separated list of "Key: Value" headers for mpv
+    std::string addonName;        // Source addon name
 };
 
 // ─── Subtitle Objects ────────────────────────

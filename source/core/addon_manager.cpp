@@ -12,6 +12,9 @@
 #include <algorithm>
 #include <future>
 #include <vector>
+#include <sstream>
+#include <cctype>
+#include <unordered_set>
 
 namespace ss {
 
@@ -165,25 +168,41 @@ bool AddonManager::loadConfig(const std::string& configPath) {
                             if (ex.IsString()) cat.extraSupported.push_back(ex.GetString());
                         }
                     }
+                    if (cat.extraSupported.empty() && c.HasMember("extra") && c["extra"].IsArray()) {
+                        for (auto& e : c["extra"].GetArray()) {
+                            if (e.IsObject() && e.HasMember("name") && e["name"].IsString()) {
+                                cat.extraSupported.push_back(e["name"].GetString());
+                            }
+                        }
+                    }
                     addon.manifest.catalogs.push_back(std::move(cat));
                 }
             }
             if (a.HasMember("resources") && a["resources"].IsArray()) {
                 for (auto& r : a["resources"].GetArray()) {
-                    if (!r.IsObject()) continue;
-                    ResourceDef res;
-                    if (r.HasMember("name") && r["name"].IsString()) res.name = r["name"].GetString();
-                    if (r.HasMember("types") && r["types"].IsArray()) {
-                        for (auto& t : r["types"].GetArray()) {
-                            if (t.IsString()) res.types.push_back(t.GetString());
+                    if (r.IsString()) {
+                        ResourceDef res;
+                        res.name = r.GetString();
+                        res.types = addon.manifest.types;
+                        res.idPrefixes = addon.manifest.idPrefixes;
+                        addon.manifest.resources.push_back(std::move(res));
+                    } else if (r.IsObject()) {
+                        ResourceDef res;
+                        if (r.HasMember("name") && r["name"].IsString()) res.name = r["name"].GetString();
+                        if (r.HasMember("types") && r["types"].IsArray()) {
+                            for (auto& t : r["types"].GetArray()) {
+                                if (t.IsString()) res.types.push_back(t.GetString());
+                            }
                         }
-                    }
-                    if (r.HasMember("idPrefixes") && r["idPrefixes"].IsArray()) {
-                        for (auto& p : r["idPrefixes"].GetArray()) {
-                            if (p.IsString()) res.idPrefixes.push_back(p.GetString());
+                        if (r.HasMember("idPrefixes") && r["idPrefixes"].IsArray()) {
+                            for (auto& p : r["idPrefixes"].GetArray()) {
+                                if (p.IsString()) res.idPrefixes.push_back(p.GetString());
+                            }
                         }
+                        if (res.types.empty()) res.types = addon.manifest.types;
+                        if (res.idPrefixes.empty()) res.idPrefixes = addon.manifest.idPrefixes;
+                        addon.manifest.resources.push_back(std::move(res));
                     }
-                    addon.manifest.resources.push_back(std::move(res));
                 }
             }
 
@@ -199,6 +218,49 @@ bool AddonManager::loadConfig(const std::string& configPath) {
                 }
                 addon.manifest.types = {"movie", "series"};
                 addon.manifest.idPrefixes = {"tt"};
+            }
+
+            if (url.find("tmdb-addon") != std::string::npos) {
+                if (addon.manifest.id.empty()) addon.manifest.id = "tmdb-addon";
+                if (addon.manifest.name.empty()) addon.manifest.name = "The Movie Database Addon";
+                if (addon.manifest.types.empty()) addon.manifest.types = {"movie", "series"};
+                if (addon.manifest.idPrefixes.empty()) addon.manifest.idPrefixes = {"tmdb:", "tt"};
+                if (addon.manifest.resources.empty()) {
+                    ResourceDef rCat;
+                    rCat.name = "catalog";
+                    rCat.types = {"movie", "series"};
+                    rCat.idPrefixes = {"tmdb:", "tt"};
+                    addon.manifest.resources.push_back(std::move(rCat));
+                    ResourceDef rMeta;
+                    rMeta.name = "meta";
+                    rMeta.types = {"movie", "series"};
+                    rMeta.idPrefixes = {"tmdb:", "tt"};
+                    addon.manifest.resources.push_back(std::move(rMeta));
+                }
+                if (addon.manifest.catalogs.empty()) {
+                    addon.manifest.catalogs = getAddonFallbackCatalogs(url);
+                }
+            }
+            if (url.find("cinemeta") != std::string::npos) {
+                if (addon.manifest.id.empty()) addon.manifest.id = "com.linvo.cinemeta";
+                if (addon.manifest.name.empty()) addon.manifest.name = "Cinemeta";
+                if (addon.manifest.types.empty()) addon.manifest.types = {"movie", "series"};
+                if (addon.manifest.idPrefixes.empty()) addon.manifest.idPrefixes = {"tt"};
+                if (addon.manifest.resources.empty()) {
+                    ResourceDef rCat;
+                    rCat.name = "catalog";
+                    rCat.types = {"movie", "series"};
+                    rCat.idPrefixes = {"tt"};
+                    addon.manifest.resources.push_back(std::move(rCat));
+                    ResourceDef rMeta;
+                    rMeta.name = "meta";
+                    rMeta.types = {"movie", "series"};
+                    rMeta.idPrefixes = {"tt"};
+                    addon.manifest.resources.push_back(std::move(rMeta));
+                }
+                if (addon.manifest.catalogs.empty()) {
+                    addon.manifest.catalogs = getAddonFallbackCatalogs(url);
+                }
             }
 
             // Deduplicate by manifest ID on load — prevents two list entries for
@@ -224,6 +286,24 @@ bool AddonManager::loadConfig(const std::string& configPath) {
 
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
+        bool hasLocal = false;
+        for (const auto& a : m_addons) {
+            if (a.transportUrl == "local://media" || a.manifest.id == "local-media" || a.manifest.id == "local") {
+                hasLocal = true;
+                break;
+            }
+        }
+        if (!hasLocal) {
+            InstalledAddon localAddon;
+            localAddon.transportUrl = "local://media";
+            localAddon.enabled = true;
+            localAddon.manifest.id = "local-media";
+            localAddon.manifest.name = "Local Media";
+            localAddon.manifest.description = "Built-in local media player for videos stored on SD card (/switch/switchstream/videos).";
+            localAddon.manifest.version = "1.0.0";
+            localAddon.manifest.types = {"movie", "series"};
+            m_addons.push_back(std::move(localAddon));
+        }
         sortAddons();
     }
 
@@ -492,6 +572,7 @@ void AddonManager::addAddon(const InstalledAddon& addon) {
 }
 
 void AddonManager::removeAddon(const std::string& addonId) {
+    if (addonId == "local-media" || addonId == "local" || addonId == "local://media") return;
     m_suppressStreamAddonWarning = false;
     std::lock_guard<std::mutex> lock(m_addonsMutex);
     m_addons.erase(
@@ -524,7 +605,7 @@ void AddonManager::sortAddons() {
 
 void AddonManager::ensureManifest(InstalledAddon& addon) {
     if (addon.manifest.transportUrl.empty()) addon.manifest.transportUrl = addon.transportUrl;
-    if (addon.manifest.resources.empty() && addon.manifest.catalogs.empty()) {
+    if (addon.manifest.resources.empty() || addon.manifest.catalogs.empty()) {
         if (m_client.fetchManifest(addon.transportUrl, addon.manifest)) {
             addon.manifest.transportUrl = addon.transportUrl;
             std::lock_guard<std::mutex> lock(m_addonsMutex);
@@ -537,10 +618,23 @@ void AddonManager::ensureManifest(InstalledAddon& addon) {
             }
         }
     }
+
+    if (addon.manifest.resources.empty()) {
+        std::string low = addon.transportUrl;
+        for (char& c : low) c = (char)tolower((unsigned char)c);
+        if (low.find("webstreamr") != std::string::npos) {
+            ResourceDef r;
+            r.name = "stream";
+            r.types = {"movie", "series"};
+            r.idPrefixes = {"tt", "tmdb:"};
+            addon.manifest.resources.push_back(r);
+        }
+    }
     if (addon.manifest.name.empty()) addon.manifest.name = getAddonFallbackName(addon.transportUrl);
     if (addon.manifest.description.empty()) addon.manifest.description = getAddonFallbackDesc(addon.transportUrl);
     if (addon.manifest.id.empty()) addon.manifest.id = getAddonFallbackId(addon.transportUrl);
     if (addon.manifest.logo.empty()) addon.manifest.logo = getAddonFallbackLogo(addon.transportUrl);
+    if (addon.manifest.catalogs.empty()) addon.manifest.catalogs = getAddonFallbackCatalogs(addon.transportUrl);
     if (addon.manifest.transportUrl.empty()) addon.manifest.transportUrl = addon.transportUrl;
 }
 
@@ -608,18 +702,35 @@ bool AddonManager::addonHandles(const InstalledAddon& addon,
                 low.find("dramayo") != std::string::npos ||
                 low.find("inmax") != std::string::npos ||
                 low.find("thepiratebay") != std::string::npos ||
-                low.find("torrentsdb") != std::string::npos) {
+                low.find("torrentsdb") != std::string::npos ||
+                low.find("webstreamr") != std::string::npos ||
+                low.find("indian-livetv") != std::string::npos ||
+                low.find("indian.tv") != std::string::npos) {
                 return true;
             }
         } else if (resource == "catalog") {
             if (low.find("catalog") != std::string::npos ||
                 low.find("cinemeta") != std::string::npos ||
+                low.find("tmdb-addon") != std::string::npos ||
                 low.find("kdramacrush") != std::string::npos ||
                 low.find("yastream") != std::string::npos ||
                 low.find("tamthai") != std::string::npos ||
                 low.find("cyberflix") != std::string::npos ||
                 low.find("animestream") != std::string::npos ||
-                low.find("watchhub") != std::string::npos) {
+                low.find("watchhub") != std::string::npos ||
+                low.find("indian-livetv") != std::string::npos ||
+                low.find("indian.tv") != std::string::npos) {
+                return true;
+            }
+        } else if (resource == "meta") {
+            if (low.find("cinemeta") != std::string::npos ||
+                low.find("tmdb-addon") != std::string::npos ||
+                low.find("tmdb-collections") != std::string::npos ||
+                low.find("yastream") != std::string::npos ||
+                low.find("dramayo") != std::string::npos ||
+                low.find("inmax") != std::string::npos ||
+                low.find("indian-livetv") != std::string::npos ||
+                low.find("indian.tv") != std::string::npos) {
                 return true;
             }
         }
@@ -802,8 +913,45 @@ std::vector<CatalogRow> AddonManager::getHomeCatalogs(const std::string& type) {
 
 // ─── Parallel search ─────────────────────────────────────────────────────────
 
+bool AddonManager::itemMatchesQuery(const std::string& title, const std::string& query) {
+    if (query.empty()) return true;
+    if (title.empty()) return false;
+
+    auto cleanStr = [](const std::string& s) -> std::string {
+        std::string res;
+        res.reserve(s.size());
+        for (char c : s) {
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == ' ') {
+                res += (char)std::tolower(static_cast<unsigned char>(c));
+            } else {
+                res += ' ';
+            }
+        }
+        return res;
+    };
+
+    std::string cleanTitle = cleanStr(title);
+    std::string cleanQuery = cleanStr(query);
+
+    if (cleanTitle.find(cleanQuery) != std::string::npos) return true;
+
+    std::istringstream iss(cleanQuery);
+    std::string token;
+    bool allMatched = true;
+    int tokenCount = 0;
+    while (iss >> token) {
+        if (token.empty()) continue;
+        tokenCount++;
+        if (cleanTitle.find(token) == std::string::npos) {
+            allMatched = false;
+            break;
+        }
+    }
+    return (tokenCount > 0 && allMatched);
+}
+
 std::vector<MetaItem> AddonManager::search(const std::string& query,
-                                            const std::string& type) {
+                                           const std::string& type) {
     std::vector<InstalledAddon> localAddons;
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
@@ -820,25 +968,66 @@ std::vector<MetaItem> AddonManager::search(const std::string& query,
             [this, addon, query, type]() mutable -> ItemVec {
                 ensureManifest(addon);
                 ItemVec results;
-                for (auto& cat : addon.manifest.catalogs) {
-                    if (!type.empty() && cat.type != type) continue;
-                    bool supportsSearch = false;
-                    for (auto& extra : cat.extraSupported) {
-                        if (extra == "search") { supportsSearch = true; break; }
-                    }
-                    if (!supportsSearch) continue;
 
+                struct Target {
+                    CatalogDef cat;
+                    bool explicitSearch;
+                };
+                std::vector<Target> targets;
+
+                // 1. Catalogs with explicit search support or search in id/name
+                for (const auto& cat : addon.manifest.catalogs) {
+                    if (!type.empty() && cat.type != type) continue;
+                    bool hasSearch = false;
+                    for (const auto& ex : cat.extraSupported) {
+                        if (ex == "search") { hasSearch = true; break; }
+                    }
+                    std::string catIdLow = cat.id;
+                    for (char& c : catIdLow) c = (char)tolower((unsigned char)c);
+                    if (catIdLow.find("search") != std::string::npos) hasSearch = true;
+
+                    if (hasSearch) {
+                        targets.push_back({cat, true});
+                    }
+                }
+
+                // 2. If no catalog explicitly declares search, query up to 3 primary catalogs
+                if (targets.empty() && !addon.manifest.catalogs.empty()) {
+                    int moviesAdded = 0, seriesAdded = 0, otherAdded = 0;
+                    for (const auto& cat : addon.manifest.catalogs) {
+                        if (!type.empty() && cat.type != type) continue;
+                        if (cat.type == "movie" && moviesAdded < 2) {
+                            targets.push_back({cat, false});
+                            moviesAdded++;
+                        } else if ((cat.type == "series" || cat.type == "tv") && seriesAdded < 2) {
+                            targets.push_back({cat, false});
+                            seriesAdded++;
+                        } else if (cat.type != "movie" && cat.type != "series" && cat.type != "tv" && otherAdded < 1) {
+                            targets.push_back({cat, false});
+                            otherAdded++;
+                        }
+                        if (targets.size() >= 3) break;
+                    }
+                }
+
+                for (const auto& tgt : targets) {
                     CatalogResponse resp;
-                    if (m_client.searchCatalog(addon.manifest, cat.type, cat.id, query, resp)) {
-                        printf("[AddonManager] Addon '%s' (%s) returned %zu search results for '%s'\n",
-                               addon.manifest.name.c_str(), cat.type.c_str(), resp.metas.size(), query.c_str());
+                    if (m_client.searchCatalog(addon.manifest, tgt.cat.type, tgt.cat.id, query, resp)) {
+                        printf("[AddonManager] Addon '%s' (%s - %s) returned %zu search results for '%s'\n",
+                               addon.manifest.name.c_str(), tgt.cat.type.c_str(), tgt.cat.id.c_str(), resp.metas.size(), query.c_str());
                         for (auto& meta : resp.metas) {
+                            // If fallback catalog (not explicit search), filter by query matching
+                            if (!tgt.explicitSearch) {
+                                if (!itemMatchesQuery(meta.name, query) && !itemMatchesQuery(meta.description, query)) {
+                                    continue;
+                                }
+                            }
                             meta.addonName = addon.manifest.name;
                             results.push_back(std::move(meta));
                         }
                     } else {
-                        printf("[AddonManager] Addon '%s' (%s) search failed for '%s'\n",
-                               addon.manifest.name.c_str(), cat.type.c_str(), query.c_str());
+                        printf("[AddonManager] Addon '%s' (%s - %s) search failed for '%s'\n",
+                               addon.manifest.name.c_str(), tgt.cat.type.c_str(), tgt.cat.id.c_str(), query.c_str());
                     }
                 }
                 return results;
@@ -846,9 +1035,24 @@ std::vector<MetaItem> AddonManager::search(const std::string& query,
     }
 
     std::vector<MetaItem> results;
+    std::unordered_set<std::string> seenIds;
     for (auto& fut : futures) {
         auto items = fut.get();
-        for (auto& item : items) results.push_back(std::move(item));
+        for (auto& item : items) {
+            if (item.id.empty()) continue;
+            if (seenIds.insert(item.id).second) {
+                results.push_back(std::move(item));
+            } else {
+                for (auto& existing : results) {
+                    if (existing.id == item.id) {
+                        if (existing.addonName.find(item.addonName) == std::string::npos) {
+                            existing.addonName += ", " + item.addonName;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
     return results;
 }
@@ -873,19 +1077,59 @@ bool AddonManager::getMeta(const std::string& type, const std::string& id,
 // ─── Parallel stream fetch ────────────────────────────────────────────────────
 
 std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
-                                               const std::string& videoId) {
+                                               const std::string& videoId,
+                                               const std::string& onlyAddonUrl,
+                                               const std::string& excludeAddonUrl) {
     std::vector<InstalledAddon> localAddons;
     {
         std::lock_guard<std::mutex> lock(m_addonsMutex);
         localAddons = m_addons;
     }
 
+    std::vector<Stream> allStreams;
     using StreamVec = std::vector<Stream>;
     std::vector<std::future<StreamVec>> futures;
     futures.reserve(localAddons.size());
 
     for (auto addon : localAddons) {
         if (!addon.enabled) continue;
+        if (!onlyAddonUrl.empty()) {
+            bool match = (addon.transportUrl == onlyAddonUrl ||
+                          addon.manifest.id == onlyAddonUrl ||
+                          strcasecmp(addon.manifest.name.c_str(), onlyAddonUrl.c_str()) == 0 ||
+                          strcasecmp(getAddonFallbackName(addon.transportUrl).c_str(), onlyAddonUrl.c_str()) == 0);
+            if (!match) {
+                std::string lowOnly = onlyAddonUrl;
+                for (char& c : lowOnly) c = (char)tolower((unsigned char)c);
+                std::string lowTrans = addon.transportUrl;
+                for (char& c : lowTrans) c = (char)tolower((unsigned char)c);
+                std::string lowName = addon.manifest.name;
+                for (char& c : lowName) c = (char)tolower((unsigned char)c);
+                if (lowTrans.find(lowOnly) != std::string::npos || lowName.find(lowOnly) != std::string::npos) {
+                    match = true;
+                }
+            }
+            if (!match) continue;
+        }
+        if (!excludeAddonUrl.empty()) {
+            bool match = (addon.transportUrl == excludeAddonUrl ||
+                          addon.manifest.id == excludeAddonUrl ||
+                          strcasecmp(addon.manifest.name.c_str(), excludeAddonUrl.c_str()) == 0 ||
+                          strcasecmp(getAddonFallbackName(addon.transportUrl).c_str(), excludeAddonUrl.c_str()) == 0);
+            if (!match) {
+                std::string lowEx = excludeAddonUrl;
+                for (char& c : lowEx) c = (char)tolower((unsigned char)c);
+                std::string lowTrans = addon.transportUrl;
+                for (char& c : lowTrans) c = (char)tolower((unsigned char)c);
+                std::string lowName = addon.manifest.name;
+                for (char& c : lowName) c = (char)tolower((unsigned char)c);
+                if (lowTrans.find(lowEx) != std::string::npos || lowName.find(lowEx) != std::string::npos) {
+                    match = true;
+                }
+            }
+            if (!match) continue;
+        }
+
         futures.push_back(std::async(std::launch::async,
             [this, addon, type, videoId]() mutable -> StreamVec {
                 ensureManifest(addon);
@@ -893,18 +1137,200 @@ std::vector<Stream> AddonManager::getAllStreams(const std::string& type,
                 StreamVec streams;
                 StreamResponse resp;
                 if (m_client.fetchStreams(addon.manifest, type, videoId, resp)) {
-                    for (auto& s : resp.streams) streams.push_back(std::move(s));
+                    std::string aName = addon.manifest.name.empty() ? getAddonFallbackName(addon.transportUrl) : addon.manifest.name;
+                    for (auto& s : resp.streams) {
+                        if (s.addonName.empty()) s.addonName = aName;
+                        streams.push_back(std::move(s));
+                    }
                 }
                 return streams;
             }));
     }
 
-    std::vector<Stream> allStreams;
     for (auto& fut : futures) {
         auto streams = fut.get();
         for (auto& s : streams) allStreams.push_back(std::move(s));
     }
     return allStreams;
+}
+
+bool AddonManager::isTmdbAddon(const std::string& name, const std::string& id, const std::string& url) {
+    std::string s = name + " " + id + " " + url;
+    for (char& c : s) c = (char)tolower((unsigned char)c);
+    // Explicitly exclude TMDB Collections (it's a sagas/collections catalog, belonging to Add-ons)
+    if (s.find("tmdb-collections") != std::string::npos || s.find("tmdbcollections") != std::string::npos) {
+        return false;
+    }
+    return (s.find("the movie database") != std::string::npos ||
+            s.find("tmdb") != std::string::npos ||
+            s.find("cinemeta") != std::string::npos);
+}
+
+bool AddonManager::hasTmdbAddon() const {
+    std::lock_guard<std::mutex> lock(m_addonsMutex);
+    for (const auto& a : m_addons) {
+        if (!a.enabled) continue;
+        if (isTmdbAddon(a.manifest.name, a.manifest.id, a.transportUrl)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AddonManager::isStreamProvider(const std::string& transportUrl) const {
+    if (transportUrl.empty()) return false;
+    std::string inputLow = transportUrl;
+    for (char& c : inputLow) c = (char)tolower((unsigned char)c);
+    if (inputLow.find("tmdb-collections") != std::string::npos ||
+        inputLow.find("tmdbcollections") != std::string::npos ||
+        inputLow.find("tmdb-addon") != std::string::npos ||
+        inputLow.find("cinemeta") != std::string::npos ||
+        inputLow.find("streaming-catalogs") != std::string::npos ||
+        inputLow.find("streaming catalogs") != std::string::npos ||
+        inputLow.find("netflix-catalog") != std::string::npos ||
+        inputLow.find("cyberflix") != std::string::npos ||
+        inputLow.find("kdramacrush") != std::string::npos ||
+        inputLow.find("k-drama crush") != std::string::npos ||
+        inputLow.find("watchhub") != std::string::npos ||
+        inputLow.find("kitsu") != std::string::npos ||
+        inputLow.find("anime-kitsu") != std::string::npos) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(m_addonsMutex);
+    for (const auto& a : m_addons) {
+        if (a.transportUrl != transportUrl && a.manifest.id != transportUrl) continue;
+        std::string low = a.transportUrl + " " + a.manifest.id + " " + a.manifest.name;
+        for (char& c : low) c = (char)tolower((unsigned char)c);
+        if (low.find("tmdb-collections") != std::string::npos ||
+            low.find("tmdbcollections") != std::string::npos ||
+            low.find("tmdb-addon") != std::string::npos ||
+            low.find("cinemeta") != std::string::npos ||
+            low.find("streaming-catalogs") != std::string::npos ||
+            low.find("streaming catalogs") != std::string::npos ||
+            low.find("netflix-catalog") != std::string::npos ||
+            low.find("cyberflix") != std::string::npos ||
+            low.find("kdramacrush") != std::string::npos ||
+            low.find("k-drama crush") != std::string::npos ||
+            low.find("watchhub") != std::string::npos ||
+            low.find("kitsu") != std::string::npos ||
+            low.find("anime-kitsu") != std::string::npos) {
+            return false;
+        }
+        for (const auto& r : a.manifest.resources) {
+            if (r.name == "stream") return true;
+        }
+        if (low.find("torrentio") != std::string::npos || low.find("webstream") != std::string::npos ||
+            low.find("filtorrent") != std::string::npos || low.find("torrentsdb") != std::string::npos ||
+            low.find("moviebox") != std::string::npos || low.find("dramayo") != std::string::npos ||
+            low.find("kisskh") != std::string::npos || low.find("indian-livetv") != std::string::npos ||
+            low.find("indian.tv") != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool AddonManager::isStreamAndCatalogAddon(const std::string& transportUrl) const {
+    if (transportUrl.empty()) return false;
+    std::string inputLow = transportUrl;
+    for (char& c : inputLow) c = (char)tolower((unsigned char)c);
+    if (inputLow.find("tmdb-collections") != std::string::npos ||
+        inputLow.find("tmdbcollections") != std::string::npos ||
+        inputLow.find("tmdb-addon") != std::string::npos ||
+        inputLow.find("cinemeta") != std::string::npos ||
+        inputLow.find("streaming-catalogs") != std::string::npos ||
+        inputLow.find("streaming catalogs") != std::string::npos ||
+        inputLow.find("netflix-catalog") != std::string::npos ||
+        inputLow.find("cyberflix") != std::string::npos ||
+        inputLow.find("kdramacrush") != std::string::npos ||
+        inputLow.find("k-drama crush") != std::string::npos ||
+        inputLow.find("watchhub") != std::string::npos ||
+        inputLow.find("kitsu") != std::string::npos ||
+        inputLow.find("anime-kitsu") != std::string::npos) {
+        return false;
+    }
+    if (inputLow.find("yastream") != std::string::npos ||
+        inputLow.find("tamthai") != std::string::npos ||
+        inputLow.find("dramayo") != std::string::npos ||
+        inputLow.find("yukistream") != std::string::npos ||
+        inputLow.find("kisskh") != std::string::npos ||
+        inputLow.find("moviebox") != std::string::npos ||
+        inputLow.find("indian-livetv") != std::string::npos ||
+        inputLow.find("indian.tv") != std::string::npos ||
+        inputLow.find("indian live tv") != std::string::npos) {
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(m_addonsMutex);
+    for (const auto& a : m_addons) {
+        bool match = (a.transportUrl == transportUrl || a.manifest.id == transportUrl ||
+                      strcasecmp(a.manifest.name.c_str(), transportUrl.c_str()) == 0 ||
+                      strcasecmp(getAddonFallbackName(a.transportUrl).c_str(), transportUrl.c_str()) == 0);
+        if (!match) continue;
+
+        std::string low = a.transportUrl + " " + a.manifest.id + " " + a.manifest.name;
+        for (char& c : low) c = (char)tolower((unsigned char)c);
+        if (low.find("tmdb-collections") != std::string::npos ||
+            low.find("tmdbcollections") != std::string::npos ||
+            low.find("tmdb-addon") != std::string::npos ||
+            low.find("cinemeta") != std::string::npos ||
+            low.find("streaming-catalogs") != std::string::npos ||
+            low.find("streaming catalogs") != std::string::npos ||
+            low.find("netflix-catalog") != std::string::npos ||
+            low.find("cyberflix") != std::string::npos ||
+            low.find("kdramacrush") != std::string::npos ||
+            low.find("k-drama crush") != std::string::npos ||
+            low.find("watchhub") != std::string::npos ||
+            low.find("kitsu") != std::string::npos ||
+            low.find("anime-kitsu") != std::string::npos) {
+            return false;
+        }
+
+        // Check if stream provider
+        bool hasStream = false;
+        for (const auto& r : a.manifest.resources) {
+            if (r.name == "stream") { hasStream = true; break; }
+        }
+        if (!hasStream && (low.find("yastream") != std::string::npos ||
+                           low.find("tamthai") != std::string::npos ||
+                           low.find("dramayo") != std::string::npos ||
+                           low.find("yukistream") != std::string::npos ||
+                           low.find("moviebox") != std::string::npos ||
+                           low.find("indian-livetv") != std::string::npos ||
+                           low.find("indian.tv") != std::string::npos)) {
+            hasStream = true;
+        }
+        if (!hasStream) return false;
+
+        // Check if catalog provider
+        bool hasCatalog = false;
+        for (const auto& r : a.manifest.resources) {
+            if (r.name == "catalog") { hasCatalog = true; break; }
+        }
+        if (!hasCatalog && !a.manifest.catalogs.empty()) hasCatalog = true;
+        if (!hasCatalog) {
+            if (low.find("yastream") != std::string::npos || low.find("tamthai") != std::string::npos ||
+                low.find("dramayo") != std::string::npos || low.find("yukistream") != std::string::npos ||
+                low.find("moviebox") != std::string::npos || low.find("indian-livetv") != std::string::npos ||
+                low.find("indian.tv") != std::string::npos) {
+                hasCatalog = true;
+            }
+        }
+        return hasCatalog;
+    }
+    return false;
+}
+
+std::string AddonManager::getAddonNameByUrl(const std::string& transportUrl) const {
+    if (transportUrl.empty()) return "";
+    std::lock_guard<std::mutex> lock(m_addonsMutex);
+    for (const auto& a : m_addons) {
+        if (a.transportUrl == transportUrl || a.manifest.id == transportUrl) {
+            return a.manifest.name.empty() ? getAddonFallbackName(a.transportUrl) : a.manifest.name;
+        }
+    }
+    return getAddonFallbackName(transportUrl);
 }
 
 std::vector<Subtitle> AddonManager::getAllSubtitles(const std::string& type,
@@ -962,6 +1388,7 @@ std::string AddonManager::getAddonFallbackName(const std::string& url) {
     for (char& c : low) c = (char)tolower((unsigned char)c);
 
     if (low.find("cinemeta") != std::string::npos) return "Cinemeta";
+    if (low.find("webstreamr") != std::string::npos) return "WebStreamrMBG";
     if (low.find("yastream") != std::string::npos) return "yastream";
     if (low.find("kdramacrush") != std::string::npos || low.find("k-drama") != std::string::npos) return "K-Drama Crush";
     if (low.find("cyberflix") != std::string::npos) return "CyberFlix Catalogs";
@@ -988,6 +1415,8 @@ std::string AddonManager::getAddonFallbackName(const std::string& url) {
     if (low.find("watchhub") != std::string::npos) return "WatchHub";
     if (low.find("indiastreams") != std::string::npos) return "IndiaStreams";
     if (low.find("indian-streams") != std::string::npos) return "Indian Regional Catalog";
+    if (low.find("indian-livetv") != std::string::npos || low.find("indian.tv") != std::string::npos || low.find("indian_tv") != std::string::npos) return "Indian Live TV";
+    if (low.find("tmdb-addon") != std::string::npos) return "The Movie Database Addon";
     if (low.find("tmdb-collections") != std::string::npos) return "TMDB Collections";
     if (low.find("streaming-catalogs") != std::string::npos) return "Streaming Catalogs";
     if (low.find("comet") != std::string::npos) return "Comet | ElfHosted";
@@ -1011,6 +1440,7 @@ std::string AddonManager::getAddonFallbackDesc(const std::string& url) {
     for (char& c : low) c = (char)tolower((unsigned char)c);
 
     if (low.find("cinemeta") != std::string::npos) return "The official addon for movie and series catalogs & search.";
+    if (low.find("webstreamr") != std::string::npos) return "HTTP streams for movies & series from web providers (VidSrc, MovieBox, etc.).";
     if (low.find("yastream") != std::string::npos) return "Stream Asian dramas, series and movies directly with multiple providers.";
     if (low.find("kdramacrush") != std::string::npos || low.find("k-drama") != std::string::npos) return "Asian and Korean drama catalog (drama feeds).";
     if (low.find("cyberflix") != std::string::npos) return "Movie and series catalogs sorted by streaming provider.";
@@ -1037,6 +1467,8 @@ std::string AddonManager::getAddonFallbackDesc(const std::string& url) {
     if (low.find("watchhub") != std::string::npos) return "Official streaming links (Netflix, Prime, etc.).";
     if (low.find("indiastreams") != std::string::npos) return "Trending movies and shows from Indian platforms.";
     if (low.find("indian-streams") != std::string::npos) return "Indian regional movies catalog by language.";
+    if (low.find("indian-livetv") != std::string::npos || low.find("indian.tv") != std::string::npos || low.find("indian_tv") != std::string::npos) return "Watch 250+ Indian Live TV channels from Zee5, SonyLIV, and MX Player.";
+    if (low.find("tmdb-addon") != std::string::npos) return "TMDB movie and TV show catalogs and metadata.";
     if (low.find("tmdb-collections") != std::string::npos) return "Movie collections grouped by franchise.";
     if (low.find("streaming-catalogs") != std::string::npos) return "Catalogs from Netflix, Disney+, HBO, Prime, etc.";
     if (low.find("comet") != std::string::npos) return "Fast torrent/debrid stream search.";
@@ -1051,6 +1483,9 @@ std::string AddonManager::getAddonFallbackId(const std::string& url) {
     std::string low = url;
     for (char& c : low) c = (char)tolower((unsigned char)c);
 
+    if (low.find("tmdb-addon") != std::string::npos) return "tmdb-addon";
+    if (low.find("webstreamr") != std::string::npos) return "community.webstreamrmbg";
+    if (low.find("indian-livetv") != std::string::npos || low.find("indian.tv") != std::string::npos || low.find("indian_tv") != std::string::npos) return "live.indian.tv";
     if (low.find("cinemeta") != std::string::npos) return "com.linvo.cinemeta";
     if (low.find("yastream") != std::string::npos) return "community.yastream";
     if (low.find("kdramacrush") != std::string::npos || low.find("k-drama") != std::string::npos) return "org.stremio.kdramas";
@@ -1087,6 +1522,8 @@ std::string AddonManager::getAddonFallbackLogo(const std::string& url) {
     std::string low = url;
     for (char& c : low) c = (char)tolower((unsigned char)c);
 
+    if (low.find("indian-livetv") != std::string::npos || low.find("indian.tv") != std::string::npos) return "https://www.materialui.co/materialIcons/notification/live_tv_black_192x192.png";
+    if (low.find("webstreamr") != std::string::npos) return "https://87d6a6ef6b58-webstreamrmbg.baby-beamup.club/logo.png";
     if (low.find("cinemeta") != std::string::npos) return "https://v3-cinemeta.strem.io/logo.png";
     if (low.find("tmdb-collections") != std::string::npos) return "https://github.com/youchi1/tmdb-collections/raw/main/Images/logo.png";
     if (low.find("torrentio") != std::string::npos) return "https://torrentio.strem.fun/images/logo.png";
@@ -1119,7 +1556,8 @@ std::string AddonManager::getAddonCategoryBadge(const InstalledAddon& addon) {
     std::string low = addon.transportUrl + " " + addon.manifest.id + " " + addon.manifest.name;
     for (char& c : low) c = (char)tolower((unsigned char)c);
     if (low.find("opensubtitles") != std::string::npos || low.find("subtitle") != std::string::npos) return "[Subtitles Provider]";
-    if ((low.find("yastream") != std::string::npos || low.find("dramayo") != std::string::npos || low.find("animestream") != std::string::npos) &&
+    if ((low.find("yastream") != std::string::npos || low.find("dramayo") != std::string::npos || low.find("animestream") != std::string::npos ||
+         low.find("indian-livetv") != std::string::npos || low.find("indian.tv") != std::string::npos) &&
         (low.find("catalog") != std::string::npos || low.find("stream") != std::string::npos)) {
         return "[Catalog & Stream]";
     }
@@ -1133,25 +1571,48 @@ std::vector<CatalogDef> AddonManager::getAddonFallbackCatalogs(const std::string
     std::string low = url;
     for (char& c : low) c = (char)tolower((unsigned char)c);
 
-    if (low.find("cinemeta") != std::string::npos) {
+    if (low.find("indian-livetv") != std::string::npos || low.find("indian.tv") != std::string::npos || low.find("indian_tv") != std::string::npos) {
+        cats.push_back({"tv", "zee5_home", "National Channels", {"search"}, false});
+        cats.push_back({"tv", "sliv_home", "Music & Movies", {"search"}, false});
+        cats.push_back({"tv", "mx_home", "Regional & Devotional", {"search"}, false});
+    } else if (low.find("tmdb-addon") != std::string::npos) {
+        cats.push_back({"movie", "tmdb.top", "Popular Movies", {"search", "genre", "skip"}, false});
+        cats.push_back({"series", "tmdb.top", "Popular TV Shows", {"search", "genre", "skip"}, false});
+        cats.push_back({"movie", "tmdb.trending", "Trending Movies", {"search", "genre", "skip"}, false});
+        cats.push_back({"series", "tmdb.trending", "Trending TV Shows", {"search", "genre", "skip"}, false});
+    } else if (low.find("cinemeta") != std::string::npos) {
         cats.push_back({"movie", "top", "Popular Movies", {"search", "genre", "skip"}, false});
         cats.push_back({"series", "top", "Popular Series", {"search", "genre", "skip"}, false});
     } else if (low.find("cyberflix") != std::string::npos) {
         cats.push_back({"movie", "cyberflix_movies", "CyberFlix Movies", {"search", "genre", "skip"}, false});
         cats.push_back({"series", "cyberflix_series", "CyberFlix Series", {"search", "genre", "skip"}, false});
     } else if (low.find("yastream") != std::string::npos || low.find("tamthai") != std::string::npos) {
+        cats.push_back({"series", "kisskh", "KissKH Dramas", {"search", "genre", "skip"}, false});
         cats.push_back({"movie", "kisskh", "KissKH Movies", {"search", "genre", "skip"}, false});
         cats.push_back({"series", "onetouchtv", "OneTouchTV Series", {"search", "genre", "skip"}, false});
-    } else if (low.find("dramayo") != std::string::npos || low.find("kdramacrush") != std::string::npos) {
-        cats.push_back({"series", "kdramacrush_catalog", "Asian Dramas", {"search", "genre", "skip"}, false});
+        cats.push_back({"movie", "onetouchtv", "OneTouchTV Movies", {"search", "genre", "skip"}, false});
+    } else if (low.find("dramayo") != std::string::npos) {
+        cats.push_back({"series", "dramayo-discover", "Dramayo Community Dramas", {"search", "genre", "skip"}, false});
+        cats.push_back({"movie", "dramayo-discover-movies", "Dramayo Community Movies", {"search", "genre", "skip"}, false});
+    } else if (low.find("kdramacrush") != std::string::npos) {
+        cats.push_back({"series", "K-Dramas", "K-Dramas Latest", {"search", "genre", "skip"}, false});
+        cats.push_back({"series", "top_kdramas_alltime", "MyDramaList Top KDramas", {"search", "genre", "skip"}, false});
     } else if (low.find("animestream") != std::string::npos) {
         cats.push_back({"anime", "animestream_catalog", "Anime", {"search", "genre", "skip"}, false});
     } else if (low.find("tmdb-collections") != std::string::npos) {
-        cats.push_back({"collections", "ctmdb.popular", "Popular Collections", {"genre"}, false});
-        cats.push_back({"collections", "ctmdb.topRated", "Top Rated Collections", {"genre"}, false});
-    } else if (low.find("netflix-catalog") != std::string::npos) {
-        cats.push_back({"movie", "netflix-movies", "Netflix Movies", {"genre"}, false});
-        cats.push_back({"series", "netflix-series", "Netflix Series", {"genre"}, false});
+        cats.push_back({"collections", "ctmdb.popular", "Popular Collections", {"search", "genre"}, false});
+        cats.push_back({"collections", "ctmdb.topRated", "Top Rated Collections", {"search", "genre"}, false});
+        cats.push_back({"collections", "ctmdb.search", "Search Collections", {"search", "genre"}, false});
+    } else if (low.find("netflix-catalog") != std::string::npos || low.find("streaming-catalogs") != std::string::npos) {
+        cats.push_back({"movie", "nfx", "Netflix Movies", {"search", "genre"}, false});
+        cats.push_back({"series", "nfx", "Netflix Series", {"search", "genre"}, false});
+        cats.push_back({"movie", "dnp", "Disney+ Movies", {"search", "genre"}, false});
+        cats.push_back({"series", "dnp", "Disney+ Series", {"search", "genre"}, false});
+        cats.push_back({"movie", "hbm", "HBO Max Movies", {"search", "genre"}, false});
+        cats.push_back({"series", "hbm", "HBO Max Series", {"search", "genre"}, false});
+    } else if (low.find("indiastreams") != std::string::npos || low.find("indian-streams") != std::string::npos) {
+        cats.push_back({"movie", "top", "Indian Movies", {"search", "genre"}, false});
+        cats.push_back({"series", "top", "Indian Series", {"search", "genre"}, false});
     } else if (low.find("watchhub") != std::string::npos) {
         cats.push_back({"movie", "watchhub", "WatchHub", {"search", "genre", "skip"}, false});
     }

@@ -9,6 +9,7 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include <functional>
 
 namespace ss {
 
@@ -68,8 +69,18 @@ public:
     // Get meta from best available addon
     bool getMeta(const std::string& type, const std::string& id, MetaResponse& out);
 
-    // Get all streams from all addons
-    std::vector<Stream> getAllStreams(const std::string& type, const std::string& videoId);
+    // Get streams across addons (with optional single-addon filter or exclusion)
+    std::vector<Stream> getAllStreams(const std::string& type,
+                                     const std::string& videoId,
+                                     const std::string& onlyAddonUrl = "",
+                                     const std::string& excludeAddonUrl = "");
+
+    // TMDB and Addon capability helpers
+    static bool isTmdbAddon(const std::string& name, const std::string& id, const std::string& url);
+    bool hasTmdbAddon() const;
+    bool isStreamProvider(const std::string& transportUrl) const;
+    bool isStreamAndCatalogAddon(const std::string& transportUrl) const;
+    std::string getAddonNameByUrl(const std::string& transportUrl) const;
 
     // Get subtitles from all addons
     std::vector<Subtitle> getAllSubtitles(const std::string& type, const std::string& id);
@@ -120,6 +131,7 @@ public:
     static std::string getAddonFallbackLogo(const std::string& url);
     static std::string getAddonCategoryBadge(const InstalledAddon& addon);
     static std::vector<CatalogDef> getAddonFallbackCatalogs(const std::string& url);
+    static bool itemMatchesQuery(const std::string& title, const std::string& query);
 
 private:
     // Sort installed addons so enabled/active ones are at the top and disabled ones below
