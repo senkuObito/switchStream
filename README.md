@@ -15,65 +15,86 @@
 
 ---
 
-**SwitchStream** brings the complete [Stremio](https://www.strem.io/) streaming ecosystem directly to the **Nintendo Switch**. Built natively with raw SDL2 and `libmpv`, SwitchStream delivers lightning-fast catalog navigation, RAM-buffered BitTorrent streaming, direct HTTP/HLS video playback, and universal multi-addon search—all tailored for both handheld and docked play.
+**SwitchStream** brings the complete [Stremio](https://www.strem.io/) streaming ecosystem directly to the **Nintendo Switch**. Built natively with raw SDL2 and `libmpv`, SwitchStream delivers lightning-fast catalog navigation, RAM-buffered BitTorrent streaming, direct HTTP/HLS video playback, local video viewing, and universal multi-addon search—all tailored for both handheld and docked play.
 
 ---
 
 ## 📸 Screenshots (Captured Directly on Nintendo Switch)
 
-| Home Catalog Feed | Media Detail & Stream Sources |
+| Continue Watching & Home Catalog | Category Filter Navigation |
 |:---:|:---:|
-| <img src="screenshots/switch_home.jpg" alt="Home Screen - Catalog Feed & Navigation" width="100%" /> | <img src="screenshots/switch_detail.jpg" alt="Detail Screen - Episodes & Streams" width="100%" /> |
-| *Curated catalog rows, category filters, and high-res poster navigation* | *Full synopsis, season selector, IMDb ratings, and parallel stream resolver* |
+| <img src="screenshots/switch_continue_watching.jpg" alt="Continue Watching & Netflix Catalog" width="100%" /> | <img src="screenshots/switch_categories.jpg" alt="Category Filters & HBO Max Catalog" width="100%" /> |
+| *Pinned "Recently Watched" row at the top with watch progress bars & Netflix catalog* | *Instant category filter pills ([All], [Live TV], [Add-ons]) and HBO Max catalog* |
 
-| Engine Settings & Hardware Acceleration | Performance HUD & Storage Cleaner |
+| Media Detail & Stream Providers | Installed Addons Manager |
 |:---:|:---:|
-| <img src="screenshots/switch_settings.jpg" alt="Settings - Torrent Engine & Video" width="100%" /> | <img src="screenshots/switch_hud_storage.jpg" alt="Settings - HUD & Storage Management" width="100%" /> |
-| *BitTorrent circular buffer, TorrServer host, and Tegra X1 GPU decoding* | *Real-time RAM/CPU/Data overlay toggles and granular disk cache management* |
+| <img src="screenshots/switch_detail.jpg" alt="Media Detail & Parallel Streams" width="100%" /> | <img src="screenshots/switch_addons.jpg" alt="Addons Manager (20 Installed)" width="100%" /> |
+| *Episodes list, IMDb badge, synopsis, and parallel stream resolvers (720p/1080p HLS)* | *Manage community & official addons: Torrentio, OpenSubtitles, TMDB, Streaming Catalogs* |
+
+| Direct Torrent Streaming & Video Engine | Real-Time Performance HUD & Settings |
+|:---:|:---:|
+| <img src="screenshots/switch_torrent_settings.jpg" alt="Torrent Streaming Settings" width="100%" /> | <img src="screenshots/switch_hud.jpg" alt="Performance HUD & System Settings" width="100%" /> |
+| *Enable on-device BitTorrent streaming in RAM, TorrServer URL, and Tegra X1 GPU decoding* | *Live HUD overlay monitoring RAM, Cache, CPU usage, and network data transfer* |
 
 ---
 
-## ✨ Features
+## ✨ Main Features in v2.0.0
 
-### 🎬 Stremio Ecosystem & Catalog Discovery
-- **Universal Addon Support**: Aggregates official and community Stremio addons (Cinemeta, YaStream, Streaming Catalogs, TMDB Collections, Dramayo, K-Drama Crush, AnimeStream, WebStreamr, and more).
-- **Curated Horizontal Rows**: Browse popular movies, trending series, anime, and collections with responsive navigation and lazy-loaded posters.
-- **Quick Category Filter Pills**: Tap or cycle (`[ZL]` / `[ZR]`) between *All*, *Movies*, *Series*, *Asian & K-Dramas*, and *Live TV*.
-- **Continue Watching with Auto-Resume**: Automatically stores playback progress, highlights watched items with colored completion bars, and resumes playback with one click.
-- **Local Media Library**: Automatically indexes offline video files placed in `sdmc:/switch/switchstream/videos/` alongside online feeds.
+### ⚡ Direct Torrent Streaming (In-Memory RAM Buffer)
+- **Native BitTorrent Engine**: Stream torrents directly on your Nintendo Switch into an in-memory circular RAM buffer (`torrentfs`) with intelligent piece prioritization (head and tail pieces first).
+- **Zero SD Card Wear**: Video blocks are buffered dynamically in RAM, preserving the lifespan of your Switch micro-SD card.
+- **Enable via Settings**: Open Settings (`[X]` on Home) and toggle **Enable Torrent Streams** to **`ON (Enabled)`**.
+- **TorrServer Integration**: Seamlessly switch between native on-device torrent streaming and an internal/external TorrServer instance (`http://127.0.0.1:8090`).
 
-### 🔍 Universal Multi-Addon Search
-- **Global Parallel Query**: Press `[Y]` anywhere to launch the native Switch on-screen keyboard and search across all enabled addons concurrently.
-- **Client-Side Token Matching**: Intelligent multi-word fuzzy matching surfaces catalog items even when external providers lack server-side search endpoints.
-- **Deduplication Engine**: Merges duplicate movie and series listings across providers into a unified title card.
-- **Local Media Search**: Seamlessly searches local SD card videos alongside online stream catalogs.
-
-### ⚡ Streaming Engines & High-Performance Playback
-- **Tegra X1 Hardware Video Decoding**: Uses hardware-accelerated decoding contexts in `libmpv` for smooth 720p and 1080p playback without frame drops.
-- **RAM-Based BitTorrent Streaming**: Native on-device BitTorrent engine streaming into a circular RAM buffer (`torrentfs`) with head/tail piece prioritization—stream torrents without flash memory wear on your SD card.
-- **Direct HTTP & HLS Pipelines**: Fast video pipelines for WebStreamr, OneTouchTV, Dramayo, VidSrc, KissKH, MovieBox, and YouTube streams.
-- **Indian Live TV (250+ Channels)**: Direct access to 24/7 Live TV streams from Zee5, SonyLIV, and MX Player with instant start times and zero buffering.
-- **TorrServer Endpoint Support**: Option to route torrent streams through an internal or external TorrServer instance (`http://127.0.0.1:8090`).
-
-### 🎮 Modern Touch & Gamepad Video Player
-- **Interactive On-Screen Display (OSD)**: Displays current time, remaining time, buffer health percentage, and live download bitrate.
-- **Accumulating Seek Badges**: Visual indicator (`+5s`, `-10s`, etc.) shows exact time jumped on rapid D-pad or bumper presses.
+### 🎮 Enhanced Video Player Experience
+- **5-Second Joy-Con Skips**: Tap Left / Right on the D-Pad or Joy-Cons to skip 5 seconds backward or forward.
+- **Dynamic Seek Delta Badge**: Displays cumulative jump time (`+5s`, `+10s`, `-15s`) that automatically aggregates on rapid button taps.
+- **Long Press `[R]` for 2x Fast-Forward**: Hold down the **`[R]`** bumper/trigger during video playback to fast-forward at smooth 2x speed.
 - **Dual-Side Touch Gestures**:
-  - **Left Side Swipe Up/Down**: Adjust display brightness smoothly.
-  - **Right Side Swipe Up/Down**: Adjust audio volume smoothly.
-  - **Scrub Bar Drag**: Tap or drag along the progress bar to instantly jump to any timestamp.
-- **Subtitles & Audio Track Switcher**: On-the-fly subtitle language picker (embedded and OpenSubtitles v3) and audio track switcher (`[Y]` and `[X]`).
+  - **Swipe Up/Down on Right Side**: Adjust audio volume smoothly.
+  - **Swipe Up/Down on Left Side**: Adjust screen brightness smoothly.
+  - **Timeline Scrub**: Touch and drag along the player progress bar to seek with real-time delta indicators.
+- **Subtitles & Audio Track Picker**: Switch subtitle languages (embedded and OpenSubtitles v3) and cycle audio tracks on the fly with `[Y]` and `[X]`.
 
-### 📊 System Diagnostics & Storage Management
-- **Real-Time Performance HUD**: Toggleable on-screen monitor showing physical RAM usage, image cache memory, CPU utilization percentage, and cumulative network data transfer.
-- **Granular Storage Cleaner**: View exact SD card disk space consumed by cached posters, logs, and home metadata, with one-click cache clearing.
-- **Title Takeover Protection**: Detects and alerts if the app is launched in Applet Mode (restricted to 400MB) to ensure users always run in Application Mode with full 3.5GB RAM access.
+### 📌 Continue Watching Pinned at the Top
+- **Prominent Top Placement**: The "Recently Watched" row is pinned directly at the top of the Home feed for instant access to your active shows and movies.
+- **Visual Progress & Time Remaining**: Displays colored progress bars and exact runtime left (e.g. `Movie • 75m left`).
+- **One-Click Resume**: Click `[A]` on any recently watched item to resume playback exactly where you left off.
+
+### 🌏 C-Drama & K-Drama Addon Support
+- **Asian Streaming Providers**: Built-in compatibility and discovery for popular C-Drama and K-Drama addons (Dramayo, K-Drama Crush, KissKH, Asian stream scrapers).
+- **Dedicated Category Filters**: Quick category filtering for Asian Dramas and regional content using `[ZL]` / `[ZR]` or touch filter pills.
+
+### 📁 Local Video Viewing
+- **Offline SD Card Playback**: Drop personal video files (`.mp4`, `.mkv`, `.avi`, `.mov`) into:
+  ```
+  sdmc:/switch/switchstream/videos/
+  ```
+- **Unified Catalog & Search**: Local files are automatically scanned with thumbnail generation, watch history tracking, and global search inclusion.
+
+### 🔍 Universal Multi-Addon Search & Bug Fixes
+- **Multi-Threaded Parallel Search**: Press `[Y]` anywhere to open the native on-screen keyboard and search across all installed addons concurrently.
+- **Client-Side Token Matching**: Intelligent multi-token matching catches titles from catalog providers that lack server-side search endpoints.
+- **Provider Deduplication**: Combines identical movies and series across multiple addons into a single unified card showing all available stream sources.
+- **Fixed Stream Resolvers**: Resolved stream aggregation fallback so addons like Streaming Catalogs properly query all installed stream scrapers (Torrentio, WebStream, FilTorrent, TorrentsDB, etc.).
+
+### 🎨 Enhanced Catalog Loading Logic & 3D Pill Spinner
+- **3D Pill Breathing Indicator**: Smooth, GPU-composited 3D pill loading animation with pulsing breathing effect.
+- **Asynchronous Lazy Loading**: Multi-threaded non-blocking catalog fetching prevents UI hitching and memory bottlenecks when browsing extensive media libraries.
+
+### 📺 Indian Live TV (250+ Channels)
+- **24/7 Verified Live TV**: Direct HLS streaming for 250+ Indian Live TV channels from Zee5, SonyLIV, and MX Player with instantaneous start times and zero buffering.
+
+### 📊 Real-Time Performance HUD & Cache Storage Cleaner
+- **Live Diagnostics Overlay**: Real-time HUD displaying physical RAM consumption, poster cache size, CPU utilization, and network data throughput.
+- **Granular Storage Cleaner**: View exact disk consumption of cached posters, logs, and home metadata in Settings (`[X]`), with one-touch cache clearing.
+- **Title Takeover Protection**: Warns if launched under Album/Applet Mode (restricted to 400MB) to ensure full 3.5GB RAM access for high-definition playback.
 
 ---
 
-## 🕹️ Controls
+## 🕹️ Controls Reference
 
-### Gamepad Navigation
+### Navigation & Discovery
 | Button | Screen | Action |
 |:---:|:---:|:---|
 | **D-Pad / Left Stick** | All | Navigate cards, items, and menus |
@@ -82,27 +103,28 @@
 | **[Y]** | Home / Search | Open on-screen keyboard search |
 | **[X]** | Home / Detail | Toggle Bookmark / Open Settings |
 | **[L] / [R]** | Home | Jump to Library / Jump to Addons |
-| **[ZL] / [ZR]** | Home | Cycle category filter pills (*All*, *Movies*, *Series*, etc.) |
+| **[ZL] / [ZR]** | Home | Cycle category filter pills (*All*, *Live TV*, *Add-ons*, etc.) |
 | **[L] / [R]** | Detail | Switch between TV seasons |
 | **[+]** | All | Safely exit SwitchStream |
 
-### In-Player Controls
-| Button | Action |
+### In-Player Playback Controls
+| Control | Action |
 |:---:|:---|
 | **[A]** | Play / Pause video |
-| **Left / Right** | Seek backward / forward 10 seconds |
-| **Up / Down** | Adjust audio volume ±5% |
-| **[Y]** | Open Subtitles menu |
-| **[X]** | Open Audio Tracks menu |
-| **[B]** | Stop playback and return to detail screen |
+| **Left / Right (D-Pad or Joy-Con)** | Skip backward / forward 5 seconds |
+| **Hold [R] (Long Press)** | Fast-forward at **2x speed** |
+| **Up / Down (D-Pad)** | Adjust audio volume ±5% |
+| **[Y]** | Open Subtitles selector (Embedded & OpenSubtitles) |
+| **[X]** | Open Audio Tracks selector |
+| **[B]** | Stop playback and return to media details |
 
 ### Touchscreen Gestures
-- **Tap Card / Button**: Select or activate any interface element directly.
-- **Horizontal Swipe**: Scroll through catalog poster rows and categories.
-- **Left Half Vertical Swipe**: Adjust screen brightness up or down.
-- **Right Half Vertical Swipe**: Adjust audio volume up or down.
-- **Timeline Scrub**: Drag along the player progress bar to jump to any timestamp.
-- **Filter Pills**: Tap any category pill (*All*, *Movies*, *Series*, *Live TV*) to filter instantly.
+- **Tap Element**: Select or activate any poster, episode, or button directly.
+- **Horizontal Swipe**: Scroll through catalog rows and category feeds smoothly.
+- **Swipe Up / Down (Left Half)**: Adjust display brightness.
+- **Swipe Up / Down (Right Half)**: Adjust audio volume.
+- **Timeline Scrubbing**: Drag along the player progress bar to jump to any timestamp.
+- **Category Filter Pills**: Tap any pill (*All*, *Live TV*, *Add-ons*) to filter instantly.
 
 ---
 
@@ -110,12 +132,12 @@
 
 ### Requirements
 - A Nintendo Switch running custom firmware (**Atmosphère**).
-- **Application Mode (Title Takeover)**: Hold **[R]** while launching any installed game from the Switch home menu to open the Homebrew Menu.  
+- **Application Mode (Title Takeover)**: Hold **[R]** while launching any installed game from the Switch home menu to launch the Homebrew Menu.  
   *(Do NOT launch from the Album applet to ensure full 3.5GB RAM access for video decoding).*
 
 ### Quick Install
-1. Download the latest **`switchstream.nro`** from the [GitHub Releases](https://github.com/senkuObito/switchStream/releases/latest) page.
-2. Place `switchstream.nro` onto your SD card at:
+1. Download **`switchstream.nro`** from the [GitHub Releases](https://github.com/senkuObito/switchStream/releases/latest) page.
+2. Copy `switchstream.nro` to your SD card at:
    ```
    sdmc:/switch/switchstream/switchstream.nro
    ```
@@ -123,7 +145,8 @@
    ```
    sdmc:/switch/switchstream/videos/
    ```
-4. Launch **SwitchStream** through the Homebrew Menu and enjoy!
+4. *(Optional for Torrents)* Open **Settings** (`[X]`) and toggle **Enable Torrent Streams** to **`ON`**.
+5. Launch **SwitchStream** through the Homebrew Menu and enjoy!
 
 ---
 
