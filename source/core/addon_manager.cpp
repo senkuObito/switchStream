@@ -85,6 +85,12 @@ bool AddonManager::loadConfig(const std::string& configPath) {
         m_showDataUsage = doc["show_data_usage"].GetBool();
     }
 
+    if (doc.HasMember("v2_defaults_applied") && doc["v2_defaults_applied"].IsBool()) {
+        m_v2DefaultsApplied = doc["v2_defaults_applied"].GetBool();
+    } else {
+        m_v2DefaultsApplied = false;
+    }
+
     if (doc.HasMember("addons") && doc["addons"].IsArray()) {
         for (auto& a : doc["addons"].GetArray()) {
             if (!a.IsObject() || !a.HasMember("url")) continue;
@@ -296,7 +302,7 @@ bool AddonManager::loadConfig(const std::string& configPath) {
         if (!hasLocal) {
             InstalledAddon localAddon;
             localAddon.transportUrl = "local://media";
-            localAddon.enabled = true;
+            localAddon.enabled = false;
             localAddon.manifest.id = "local-media";
             localAddon.manifest.name = "Local Media";
             localAddon.manifest.description = "Built-in local media player for videos stored on SD card (/switch/switchstream/videos).";
@@ -345,6 +351,9 @@ bool AddonManager::saveConfig(const std::string& configPath) const {
 
     writer.Key("show_data_usage");
     writer.Bool(m_showDataUsage);
+
+    writer.Key("v2_defaults_applied");
+    writer.Bool(m_v2DefaultsApplied);
 
     writer.Key("addons");
     writer.StartArray();
@@ -589,6 +598,17 @@ void AddonManager::toggleAddon(const std::string& addonId) {
     for (auto& a : m_addons) {
         if (a.manifest.id == addonId || a.transportUrl == addonId) {
             a.enabled = !a.enabled;
+        }
+    }
+    sortAddons();
+}
+
+void AddonManager::setAddonEnabled(const std::string& addonIdOrUrl, bool enabled) {
+    m_suppressStreamAddonWarning = false;
+    std::lock_guard<std::mutex> lock(m_addonsMutex);
+    for (auto& a : m_addons) {
+        if (a.manifest.id == addonIdOrUrl || a.transportUrl == addonIdOrUrl) {
+            a.enabled = enabled;
         }
     }
     sortAddons();

@@ -331,7 +331,10 @@ bool App::init() {
                 printf("Registering missing default addon: %s\n", url.c_str());
                 InstalledAddon a;
                 a.transportUrl = url;
-                a.enabled = true;
+                // Only Cinemeta and Torrentio are enabled by default
+                bool isCinemeta = (url.find("cinemeta") != std::string::npos);
+                bool isTorrentio = (url.find("torrentio") != std::string::npos);
+                a.enabled = (isCinemeta || isTorrentio);
                 a.manifest.name = AddonManager::getAddonFallbackName(url);
                 a.manifest.description = AddonManager::getAddonFallbackDesc(url);
                 a.manifest.id = AddonManager::getAddonFallbackId(url);
@@ -351,13 +354,33 @@ bool App::init() {
             printf("Registering missing default addon: Local Media\n");
             InstalledAddon a;
             a.transportUrl = "local://media";
-            a.enabled = true;
+            a.enabled = false;
             a.manifest.id = "local-media";
             a.manifest.name = "Local Media";
             a.manifest.description = "Built-in local media player for videos stored in /switch/switchstream/videos.";
             a.manifest.version = "1.0.0";
             a.manifest.types = {"movie", "series"};
             m_addonManager.addAddon(a);
+            updatedAddons = true;
+        }
+
+        // Apply v2 policy: Ensure ONLY Cinemeta and Torrentio are enabled by default
+        if (!m_addonManager.getV2DefaultsApplied()) {
+            printf("[App] Applying v2 defaults policy: having ONLY Cinemeta and Torrentio enabled by default...\n");
+            for (const auto& a : m_addonManager.getAddons()) {
+                std::string tUrl = a.transportUrl;
+                std::string aName = a.manifest.name;
+                std::string aId = a.manifest.id;
+                for (char& c : tUrl) c = (char)tolower((unsigned char)c);
+                for (char& c : aName) c = (char)tolower((unsigned char)c);
+                for (char& c : aId) c = (char)tolower((unsigned char)c);
+
+                bool isCinemeta = (tUrl.find("cinemeta") != std::string::npos || aName.find("cinemeta") != std::string::npos || aId.find("cinemeta") != std::string::npos);
+                bool isTorrentio = (tUrl.find("torrentio") != std::string::npos || aName.find("torrentio") != std::string::npos || aId.find("torrentio") != std::string::npos);
+
+                m_addonManager.setAddonEnabled(a.transportUrl, isCinemeta || isTorrentio);
+            }
+            m_addonManager.setV2DefaultsApplied(true);
             updatedAddons = true;
         }
 

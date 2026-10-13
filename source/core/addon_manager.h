@@ -48,6 +48,12 @@ public:
     // Toggle addon enabled/disabled status
     void toggleAddon(const std::string& addonId);
 
+    // Directly set enabled state for an addon by ID or transport URL
+    void setAddonEnabled(const std::string& addonIdOrUrl, bool enabled);
+
+    bool getV2DefaultsApplied() const { return m_v2DefaultsApplied; }
+    void setV2DefaultsApplied(bool applied) { m_v2DefaultsApplied = applied; }
+
     // Get all installed addons
     std::vector<InstalledAddon> getAddons() const;
 
@@ -159,6 +165,7 @@ private:
     bool m_showCacheUsage = true;
     bool m_showCpuUsage = true;
     bool m_showDataUsage = true;
+    bool m_v2DefaultsApplied = false;
 };
 
 } // namespace ss
